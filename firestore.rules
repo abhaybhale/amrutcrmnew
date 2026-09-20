@@ -1,0 +1,242 @@
+rules_version = '2';
+
+// ============================================================================
+// Firestore is now the app's PRIMARY, real-time, shared database — every
+// signed-in user's browser reads and writes the same documents live (see
+// src/lib/useSyncedCollection.ts). Authentication is real Firebase
+// Authentication (src/lib/firebaseAuth.ts). The free/Spark-compatible setup
+// uses normal Firebase Auth uids and the React app maps CRM profiles by email.
+// `abhay@amrutsoftware.com` is the bootstrap administrator email below.
+//
+// WHAT THESE RULES DO ENFORCE:
+//   - Nobody outside the signed-in staff can read or write ANYTHING. That's
+//     the headline change from the previous "Firestore is a backup, deny
+//     everything" posture — real accounts are now the actual gate on the
+//     real database.
+//   - The most sensitive configuration surfaces (role definitions, field
+//     security rules, workflow definitions, web form configs, company
+//     records, and full user-account management) additionally require an
+//     admin-tier role (Managing Director / CRM Administrator).
+//   - Audit log documents are create-only — nobody can edit or delete an
+//     existing entry once written, from any role.
+//   - Every user can always update their own `users/{uid}` profile doc
+//     (e.g. Out-of-Office toggle), even without an admin role.
+//
+// WHAT THESE RULES DELIBERATELY DO NOT ENFORCE (see SETUP.md §6 for the
+// full list of known architectural gaps): per-tenant-company data isolation.
+// Leads, Opportunities, Accounts, Contacts, Quotes, Orders, Presales/POC
+// records and Vendors have no `companyId` field in the current data model —
+// they're a single shared pool across all companies managed in this CRM,
+// filtered only by role/ownership in the React app's `isRecordAccessible`
+// logic (CRMContext.tsx). These rules can only gate that pool at the
+// "signed-in staff or not" level, not per-company. Marketing, Finance,
+// Tasks, Google Workspace accounts and Vendor Targets DO carry a
+// `companyId`, but these rules don't yet cross-check it against the
+// requesting user's company memberships (`userMemberships`) either, since
+// Firestore rules can't run an arbitrary query across that collection to
+// find a user's membership rows — only exact-path lookups. If you need real
+// per-company isolation enforced at this layer, the practical path is to
+// key `userMemberships` documents by `{companyId}_{uid}` (a predictable,
+// gettable path) and add a `belongsToCompany(companyId)` check using
+// `exists(/databases/$(database)/documents/userMemberships/$(companyId +
+// '_' + request.auth.uid))` to every company-scoped collection's rules
+// below.
+// ============================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function myProfile() {
+      return get(/databases/$(database)/documents/users/$(crmUserId())).data;
+    }
+
+    function hasAuthProfile() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/authProfiles/$(request.auth.uid));
+    }
+
+    function crmUserId() {
+      return hasAuthProfile()
+        ? get(/databases/$(database)/documents/authProfiles/$(request.auth.uid)).data.crmUserId
+        : request.auth.uid;
+    }
+
+    function isBootstrapAdmin() {
+      return isSignedIn()
+        && request.auth.token.email == 'abhay@amrutsoftware.com';
+    }
+
+    function isAdminRole() {
+      return isBootstrapAdmin() || (isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(crmUserId()))
+        && myProfile().role in ['Managing Director', 'CRM Administrator']);
+    }
+
+    function isActiveStaff() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(crmUserId()))
+        && myProfile().isActive == true;
+    }
+
+    function canUseCrm() {
+      return isBootstrapAdmin() || isActiveStaff();
+    }
+
+    function isFinanceRole() {
+      return isAdminRole() || (isActiveStaff()
+        && myProfile().role in ['Finance & Operations', 'Accounts Head', 'Accounts Manager']);
+    }
+
+    function onlyOwnProfileFieldsChanged() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'isOutOfOffice', 'backupUserId', 'lastLogin', 'modifiedDate',
+        'isPasswordSet', 'passwordLastUpdated', 'accountStatus', 'tempActivationCode'
+      ])
+      && request.resource.data.role == resource.data.role
+      && request.resource.data.email == resource.data.email
+      && request.resource.data.isActive == resource.data.isActive;
+    }
+
+    function isSalesHeadRole() {
+      return isBootstrapAdmin() || (isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(crmUserId()))
+        && myProfile().role == 'Sales Head');
+    }
+
+    function canManageVendors() {
+      return isBootstrapAdmin() || (isActiveStaff()
+        && myProfile().role in ['CRM Administrator', 'Sales Head']);
+    }
+
+    // Sales Head is allowed to edit ONLY the company's Terms & Conditions
+    // block (see companies/{companyId} below) — everything else on that
+    // document (targets, GST %, renewal uplift %, legal/contact details)
+    // stays admin-tier only.
+    function onlyTermsAndConditionsChanged() {
+      let affectedKeys = request.resource.data.diff(resource.data).affectedKeys();
+      return affectedKeys.hasOnly(['termsAndConditions', 'termsAndConditionsLastUpdatedBy', 'termsAndConditionsLastUpdatedDate']);
+    }
+
+    // ------------------------------------------------------------------
+    // Users — anyone signed in can read the staff directory (needed for
+    // assignment pickers, org charts, team lists). Every user can edit
+    // their own profile doc; only admin-tier roles can create, edit, or
+    // delete anyone else's.
+    // ------------------------------------------------------------------
+    match /users/{userId} {
+      allow read: if canUseCrm();
+      allow create, delete: if isAdminRole();
+      allow update: if isAdminRole()
+        || (isActiveStaff() && crmUserId() == userId && onlyOwnProfileFieldsChanged());
+    }
+
+    match /authProfiles/{authUid} {
+      allow read: if isSignedIn() && request.auth.uid == authUid;
+      allow write: if false;
+    }
+
+    // ------------------------------------------------------------------
+    // Sensitive org-wide configuration — read by anyone signed in (the app
+    // needs it to render), written only by admin-tier roles.
+    // ------------------------------------------------------------------
+    match /roles/{roleId} {
+      allow read: if canUseCrm();
+      allow write: if isAdminRole();
+    }
+    match /fieldAttributes/{docId} {
+      allow read: if canUseCrm();
+      allow write: if isAdminRole();
+    }
+    match /fieldSecurityRules/{docId} {
+      allow read: if canUseCrm();
+      allow write: if isAdminRole();
+    }
+    match /workflows/{docId} {
+      allow read: if canUseCrm();
+      allow write: if isAdminRole();
+    }
+    match /webForms/{docId} {
+      allow read: if canUseCrm();
+      allow write: if isAdminRole();
+    }
+    match /companies/{companyId} {
+      allow read: if canUseCrm();
+      allow create, delete: if isAdminRole();
+      allow update: if isAdminRole() || (isSalesHeadRole() && onlyTermsAndConditionsChanged());
+    }
+
+    // ------------------------------------------------------------------
+    // Audit trail — append-only. Any signed-in action can write a new
+    // entry; nobody can alter or remove one once written.
+    // ------------------------------------------------------------------
+    match /auditLogs/{logId} {
+      allow read: if canUseCrm();
+      allow create: if isActiveStaff()
+        && request.resource.data.userId == crmUserId();
+      allow update, delete: if false;
+    }
+
+    // ------------------------------------------------------------------
+    // Core sales pipeline & everything else — a single shared pool across
+    // every company managed in this CRM (see the note at the top of this
+    // file). Gated on real sign-in; fine-grained per-record/per-role
+    // visibility stays enforced client-side in CRMContext's
+    // isRecordAccessible() and the various accessibleX derivations.
+    // ------------------------------------------------------------------
+    match /accounts/{id} { allow read, write: if canUseCrm(); }
+    match /contacts/{id} { allow read, write: if canUseCrm(); }
+    match /leads/{id} { allow read, write: if canUseCrm(); }
+    match /opportunities/{id} { allow read, write: if canUseCrm(); }
+    match /presalesRequests/{id} { allow read, write: if canUseCrm(); }
+    match /pocRecords/{id} { allow read, write: if canUseCrm(); }
+    match /quotes/{id} { allow read, write: if canUseCrm(); }
+    match /orders/{id} { allow read, write: if canUseCrm(); }
+    match /vendors/{id} {
+      allow read: if canUseCrm();
+      allow create, update, delete: if canManageVendors();
+    }
+    match /assignmentHistory/{id} { allow read, write: if canUseCrm(); }
+    match /userMemberships/{id} {
+      allow read: if isActiveStaff();
+      allow write: if isAdminRole();
+    }
+    match /vendorTargets/{id} {
+      allow read: if isActiveStaff();
+      allow write: if isAdminRole() || isSalesHeadRole();
+    }
+    match /googleAccounts/{id} {
+      allow create: if isActiveStaff() && request.resource.data.userId == crmUserId();
+      allow read, update, delete: if isActiveStaff() && resource.data.userId == crmUserId();
+    }
+    match /syncedEmails/{id} {
+      allow read, write: if isActiveStaff();
+    }
+    match /syncedEvents/{id} {
+      allow create: if isActiveStaff() && request.resource.data.userId == crmUserId();
+      allow read, update, delete: if isActiveStaff() && resource.data.userId == crmUserId();
+    }
+    match /tasks/{id} { allow read, write: if canUseCrm(); }
+    match /products/{id} { allow read, write: if canUseCrm(); }
+    match /renewalRecords/{id} { allow read, write: if canUseCrm(); }
+
+    // Marketing / Lead-Gen
+    match /marketingProjects/{id} { allow read, write: if canUseCrm(); }
+    match /campaigns/{id} { allow read, write: if canUseCrm(); }
+    match /datasets/{id} { allow read, write: if canUseCrm(); }
+    match /datasetRecords/{id} { allow read, write: if canUseCrm(); }
+
+    // Finance
+    match /invoices/{id} { allow read, write: if isFinanceRole(); }
+    match /payments/{id} { allow read, write: if isFinanceRole(); }
+    match /expenses/{id} { allow read, write: if isFinanceRole(); }
+
+    // Anything not explicitly listed above stays default-deny.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

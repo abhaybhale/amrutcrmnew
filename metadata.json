@@ -1,0 +1,6 @@
+{
+  "name": "Amrut CRM Enterprise",
+  "description": "Enterprise Monolithic CRM platform for Amrut Software featuring monday.com-inspired workspace UX, custom workflow engine, multi-role security, dynamic Vendor Head visibility, lead-to-opportunity conversions, presales/POC management, CPQ quote engine, and rich reporting.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,78 @@
+{
+  "entities": {
+    "companies": {
+      "title": "Companies",
+      "description": "Multi-company tenant profiles",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "code": { "type": "string" },
+        "country": { "type": "string" },
+        "city": { "type": "string" },
+        "currency": { "type": "string" },
+        "currencySymbol": { "type": "string" }
+      },
+      "required": ["id", "name", "code", "currency"]
+    },
+    "users": {
+      "title": "Users",
+      "description": "Application users across tenants",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string" },
+        "primaryCompanyId": { "type": "string" }
+      },
+      "required": ["id", "name", "email", "role"]
+    },
+    "leads": {
+      "title": "Leads",
+      "description": "Sales leads partitioned per company",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "leadNumber": { "type": "string" },
+        "companyName": { "type": "string" },
+        "companyId": { "type": "string" },
+        "product": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "leadNumber", "companyName", "status"]
+    },
+    "opportunities": {
+      "title": "Opportunities",
+      "description": "Deals and pipeline opportunities",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "oppNumber": { "type": "string" },
+        "title": { "type": "string" },
+        "companyId": { "type": "string" },
+        "stage": { "type": "string" },
+        "totalValue": { "type": "number" },
+        "probability": { "type": "number" }
+      },
+      "required": ["id", "title", "stage", "totalValue"]
+    },
+    "vendorTargets": {
+      "title": "Vendor Targets",
+      "description": "Sales quotas and vendor targets",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "companyId": { "type": "string" },
+        "userId": { "type": "string" },
+        "vendorId": { "type": "string" },
+        "productLicenseTarget": { "type": "number" },
+        "servicesTarget": { "type": "number" }
+      },
+      "required": ["id", "companyId", "userId", "vendorId"]
+    }
+  },
+  "firestore": {
+    "rules": "rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read, write: if true; } } }"
+  }
+}
