@@ -95,7 +95,7 @@ export const VendorsView: React.FC = () => {
         {filteredVendors.map((vendor) => {
           const vendorOpps = accessibleOpportunities.filter(o => o.vendorId === vendor.id);
           const vendorOrders = accessibleOrders.filter(o => o.accountName.includes(vendor.name) || vendorOpps.some(op => op.accountId === o.accountId));
-          const totalAchieved = vendor.annualRevenueTarget ? accessibleOrders.filter(o => vendorOpps.some(op => op.accountId === o.accountId)).reduce((sum, o) => sum + (o.totalValue || 0), 0) : 0;
+          const totalAchieved = vendor.annualRevenueTarget ? accessibleOrders.filter(o => o.vendorId === vendor.id).reduce((sum, o) => sum + (o.totalAmount || 0), 0) : 0;
           const targetPct = vendor.annualRevenueTarget > 0 ? (totalAchieved / vendor.annualRevenueTarget) * 100 : 0;
           const assignedHead = allUsers.find(u => u.id === vendor.vendorHeadUserId);
 

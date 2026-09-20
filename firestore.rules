@@ -67,7 +67,8 @@ service cloud.firestore {
 
     function isBootstrapAdmin() {
       return isSignedIn()
-        && request.auth.token.email == 'abhay@amrutsoftware.com';
+        && request.auth.token.email == 'abhay@amrutsoftware.com'
+        && request.auth.token.email_verified == true;
     }
 
     function isAdminRole() {
@@ -93,8 +94,7 @@ service cloud.firestore {
 
     function onlyOwnProfileFieldsChanged() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-        'isOutOfOffice', 'backupUserId', 'lastLogin', 'modifiedDate',
-        'isPasswordSet', 'passwordLastUpdated', 'accountStatus', 'tempActivationCode'
+        'isOutOfOffice', 'backupUserId', 'lastLogin', 'modifiedDate'
       ])
       && request.resource.data.role == resource.data.role
       && request.resource.data.email == resource.data.email
@@ -110,6 +110,18 @@ service cloud.firestore {
     function canManageVendors() {
       return isBootstrapAdmin() || (isActiveStaff()
         && myProfile().role in ['CRM Administrator', 'Sales Head']);
+    }
+
+    function isMarketingRole() {
+      return isAdminRole() || (isActiveStaff() && myProfile().role in [
+        'Marketing Admin', 'Marketing Manager', 'Marketing Person',
+        'Lead Gen Admin', 'Lead Gen Manager', 'Lead Gen',
+        'CRM Coordinator', 'Sales Head'
+      ]);
+    }
+
+    function isRenewalManager() {
+      return isAdminRole() || isSalesHeadRole();
     }
 
     // Sales Head is allowed to edit ONLY the company's Terms & Conditions
@@ -220,14 +232,25 @@ service cloud.firestore {
       allow read, update, delete: if isActiveStaff() && resource.data.userId == crmUserId();
     }
     match /tasks/{id} { allow read, write: if canUseCrm(); }
-    match /products/{id} { allow read, write: if canUseCrm(); }
-    match /renewalRecords/{id} { allow read, write: if canUseCrm(); }
+    match /products/{id} {
+      allow read: if canUseCrm();
+      allow write: if isAdminRole();
+    }
+    match /renewalRecords/{id} {
+      allow read: if canUseCrm();
+      allow create, delete: if isRenewalManager();
+      allow update: if isRenewalManager() || (isActiveStaff()
+        && resource.data.salespersonId == crmUserId()
+        && request.resource.data.salespersonId == resource.data.salespersonId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'notes', 'modifiedDate'])
+        && request.resource.data.status in ['Upcoming', 'Contacted', 'Quoted', 'Renewed', 'At Risk', 'Lost']);
+    }
 
     // Marketing / Lead-Gen
-    match /marketingProjects/{id} { allow read, write: if canUseCrm(); }
-    match /campaigns/{id} { allow read, write: if canUseCrm(); }
-    match /datasets/{id} { allow read, write: if canUseCrm(); }
-    match /datasetRecords/{id} { allow read, write: if canUseCrm(); }
+    match /marketingProjects/{id} { allow read: if canUseCrm(); allow write: if isMarketingRole(); }
+    match /campaigns/{id} { allow read: if canUseCrm(); allow write: if isMarketingRole(); }
+    match /datasets/{id} { allow read: if canUseCrm(); allow write: if isMarketingRole(); }
+    match /datasetRecords/{id} { allow read: if canUseCrm(); allow write: if isMarketingRole(); }
 
     // Finance
     match /invoices/{id} { allow read, write: if isFinanceRole(); }

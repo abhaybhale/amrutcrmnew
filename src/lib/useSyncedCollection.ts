@@ -5,6 +5,8 @@ import {
   onSnapshot,
   doc,
   setDoc,
+  updateDoc,
+  deleteField,
   deleteDoc,
   writeBatch,
   QuerySnapshot,
@@ -169,7 +171,21 @@ export function useSyncedCollection<T extends { id: string }>(
 
     nextMap.forEach((item, id) => {
       if (prevMap.get(id) !== item) {
-        setDoc(doc(db, collectionName, id), sanitizeForFirestore(item)).catch(err => {
+        const previous = prevMap.get(id);
+        const nextData = sanitizeForFirestore(item);
+        const write = previous ? (() => {
+          const previousData = sanitizeForFirestore(previous);
+          const patch: DocumentData = {};
+          for (const key of new Set([...Object.keys(previousData), ...Object.keys(nextData)])) {
+            if (JSON.stringify(previousData[key]) !== JSON.stringify(nextData[key])) {
+              patch[key] = Object.prototype.hasOwnProperty.call(nextData, key) ? nextData[key] : deleteField();
+            }
+          }
+          return Object.keys(patch).length
+            ? updateDoc(doc(db, collectionName, id), patch)
+            : Promise.resolve();
+        })() : setDoc(doc(db, collectionName, id), nextData);
+        write.catch(err => {
           console.warn(`[useSyncedCollection] write failed for "${collectionName}/${id}":`, err);
         });
       }

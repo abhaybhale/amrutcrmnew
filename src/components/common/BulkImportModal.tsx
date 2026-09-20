@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useCRM } from '../../context/CRMContext';
 import { FieldAttribute, FieldAttributeType, FieldMapping, ImportResult } from '../../types';
-import * as XLSX from 'xlsx';
+import { readXlsxRows, downloadXlsxTemplate } from '../../lib/spreadsheetFiles';
 import Papa from 'papaparse';
 import confetti from 'canvas-confetti';
 import {
@@ -210,6 +210,10 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
 
   // Process File
   const handleFileProcess = (file: File) => {
+    if (file.size > 20 * 1024 * 1024) {
+      showToast('Import file exceeds the 20 MB limit.', 'error');
+      return;
+    }
     setFileName(file.name);
     setFileSize(file.size);
     setErrorMessage(null);
@@ -238,16 +242,9 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
           showToast(`CSV parsing error: ${err.message}`, 'error');
         }
       });
-    } else if (ext === 'xlsx' || ext === 'xls') {
-      const reader = new FileReader();
-      reader.onload = (e) => {
+    } else if (ext === 'xlsx') {
+      readXlsxRows(file).then(jsonData => {
         try {
-          const data = new Uint8Array(e.target?.result as ArrayBuffer);
-          const workbook = XLSX.read(data, { type: 'array' });
-          const firstSheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[firstSheetName];
-          const jsonData = XLSX.utils.sheet_to_json<Record<string, any>>(worksheet, { defval: '' });
-
           if (jsonData && jsonData.length > 0) {
             const rawHeaders = Object.keys(jsonData[0]);
             setHeaders(rawHeaders);
@@ -255,17 +252,16 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
             setSelectedRowIndexes(new Set(jsonData.map((_, index) => index)));
             generateInitialMappings(rawHeaders, selectedModule);
             setActiveStep('mapping');
-            showToast(`Parsed ${jsonData.length} records from Excel sheet: ${firstSheetName}`, 'info');
+            showToast(`Parsed ${jsonData.length} records from ${file.name}`, 'info');
           } else {
             showToast('The selected Excel sheet contains no readable rows.', 'error');
           }
         } catch (err: any) {
           showToast(`Excel parsing error: ${err.message || 'Corrupted file'}`, 'error');
         }
-      };
-      reader.readAsArrayBuffer(file);
+      }).catch((err: Error) => showToast(`Excel parsing error: ${err.message}`, 'error'));
     } else {
-      showToast('Please upload a valid .csv, .xls, or .xlsx file.', 'warning');
+      showToast('Please upload a valid .csv or .xlsx file. Convert older .xls files first.', 'warning');
     }
   };
 
@@ -362,10 +358,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
     sampleHeaderObj['Custom Extra Field 2'] = '1000';
 
     if (format === 'xlsx') {
-      const ws = XLSX.utils.json_to_sheet([sampleHeaderObj]);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, `${selectedModule} Template`);
-      XLSX.writeFile(wb, `AmrutCRM_${selectedModule}_Import_Template.xlsx`);
+      downloadXlsxTemplate(sampleHeaderObj, `AmrutCRM_${selectedModule}_Import_Template.xlsx`).catch(err => showToast(`Template download failed: ${err.message}`, 'error'));
       showToast(`Downloaded ${selectedModule} Excel template`, 'info');
     } else {
       const csvContent = Papa.unparse([sampleHeaderObj]);
@@ -602,7 +595,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept=".csv, .xlsx, .xls"
+                    accept=".csv, .xlsx"
                     className="hidden"
                     onChange={(e) => {
                       if (e.target.files && e.target.files[0]) {

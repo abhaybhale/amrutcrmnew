@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import Papa from 'papaparse';
 import { useCRM } from '../../context/CRMContext';
 import { AuditLog } from '../../types';
 import {
@@ -102,26 +103,27 @@ export const AuditTrailView: React.FC = () => {
     const rows = filteredLogs.map(l => [
       l.id,
       new Date(l.timestamp).toISOString(),
-      `"${(l.userName || '').replace(/"/g, '""')}"`,
-      `"${(l.userRole || '').replace(/"/g, '""')}"`,
+      l.userName || '',
+      l.userRole || '',
       l.module,
       l.action,
-      `"${(l.recordName || '').replace(/"/g, '""')}"`,
+      l.recordName || '',
       l.fieldName || '',
-      `"${(l.oldValue || '').replace(/"/g, '""')}"`,
-      `"${(l.newValue || '').replace(/"/g, '""')}"`,
+      l.oldValue || '',
+      l.newValue || '',
       l.ipAddress || '',
-      `"${(l.details || '').replace(/"/g, '""')}"`
+      l.details || ''
     ]);
 
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
+    const csvContent = Papa.unparse([headers, ...rows], { escapeFormulae: true });
+    const url = URL.createObjectURL(new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }));
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
+    link.setAttribute('href', url);
     link.setAttribute('download', `amrut_crm_audit_trail_${new Date().toISOString().split('T')[0]}.csv`);
     document.body.appendChild(link);
     link.click();
     link.remove();
+    URL.revokeObjectURL(url);
     showToast('Audit trail exported to CSV', 'success');
   };
 

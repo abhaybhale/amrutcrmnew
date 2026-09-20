@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 
 export const FormBuilderView: React.FC = () => {
-  const { webForms, submitPublicWebForm, vendors } = useCRM();
+  const { webForms, submitPublicWebLead, vendors } = useCRM();
 
   const [selectedForm, setSelectedForm] = useState<WebFormConfig>(webForms[0]);
   const [copied, setCopied] = useState(false);
@@ -37,14 +37,15 @@ export const FormBuilderView: React.FC = () => {
   const handleLiveSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const vendor = vendors.find(v => v.id === testData.vendorId) || vendors[0];
-    submitPublicWebForm(selectedForm.formKey, {
+    if (!selectedForm || !vendor) return;
+    submitPublicWebLead(selectedForm.id, {
       companyName: testData.companyName,
-      contactPerson: testData.contactPerson,
-      email: testData.email,
-      phone: testData.phone,
+      contactName: testData.contactPerson,
+      contactEmail: testData.email,
+      contactPhone: testData.phone,
       vendorId: vendor.id,
       vendorName: vendor.name,
-      requirements: testData.requirements
+      requirement: testData.requirements
     });
 
     setSubmittedSuccess(true);
@@ -62,22 +63,15 @@ export const FormBuilderView: React.FC = () => {
     }, 4000);
   };
 
-  const embedCode = `<!-- Amrut CRM Monolithic Lead Capture Form (${selectedForm.name}) -->
-<div id="amrut-lead-widget" data-form-key="${selectedForm.formKey}"></div>
-<script src="https://crm.amrutsoftware.com/static/js/lead-capture-sdk.v1.js" async defer></script>
-<script>
-  window.initAmrutForm({
-    formKey: "${selectedForm.formKey}",
-    targetDiv: "amrut-lead-widget",
-    redirectUrl: "${selectedForm.redirectUrl || 'https://www.amrutsoftware.com/thank-you'}"
-  });
-</script>`;
+  const embedCode = selectedForm?.embedCode || '';
 
   const copyEmbedCode = () => {
     navigator.clipboard.writeText(embedCode);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  if (!selectedForm) return <div className="p-6 text-slate-600">No lead capture form is configured.</div>;
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6 select-none animate-in fade-in duration-200">
@@ -115,7 +109,7 @@ export const FormBuilderView: React.FC = () => {
                   <div>
                     <h4 className="font-bold text-slate-900 text-xs">{wf.name}</h4>
                     <span className="text-[10px] font-mono text-slate-500 block mt-0.5">
-                      Key: {wf.formKey} • Redirect: {wf.redirectUrl}
+                      ID: {wf.id} • Redirect: {wf.redirectUrl || 'Not configured'}
                     </span>
                   </div>
                   <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded">

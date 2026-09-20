@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { CRMProvider, useCRM } from './context/CRMContext';
 import { MarketingProvider } from './context/MarketingContext';
 import { FinanceProvider } from './context/FinanceContext';
@@ -59,24 +59,67 @@ const TAB_LABELS: Record<NavigationTab, string> = {
   deliverables: 'System & Architecture'
 };
 
+const readTabFromUrl = (): NavigationTab => {
+  const tab = new URLSearchParams(window.location.search).get('page');
+  return tab && Object.prototype.hasOwnProperty.call(TAB_LABELS, tab)
+    ? tab as NavigationTab
+    : 'dashboard';
+};
+
+const writeTabToUrl = (tab: NavigationTab) => {
+  const url = new URL(window.location.href);
+  if (tab === 'dashboard') url.searchParams.delete('page');
+  else url.searchParams.set('page', tab);
+  window.history.pushState({ tab }, '', url);
+};
+
+const canOpenTab = (tab: NavigationTab, role: string): boolean => {
+  if (tab === 'users' || tab === 'security') return role === 'CRM Administrator' || role === 'Managing Director';
+  if (tab === 'marketing') return ['Marketing Admin', 'Marketing Manager', 'Marketing Person', 'Lead Gen Admin', 'Lead Gen Manager', 'Lead Gen', 'CRM Administrator', 'Managing Director', 'CRM Coordinator', 'Sales Head'].includes(role);
+  if (tab === 'finance') return ['Finance & Operations', 'Finance & Commercial Operations', 'Accounts Head', 'Accounts Manager', 'CRM Administrator', 'Managing Director', 'CRM Coordinator'].includes(role);
+  return true;
+};
+
 const MainLayout: React.FC = () => {
-  const { isAuthenticated, isAuthResolved, isDataLoading, toasts, removeToast } = useCRM();
-  const [activeTab, setActiveTabRaw] = useState<NavigationTab>('dashboard');
+  const { isAuthenticated, isAuthResolved, isDataLoading, currentUser, toasts, removeToast } = useCRM();
+  const [activeTab, setActiveTabRaw] = useState<NavigationTab>(readTabFromUrl);
   const [tabHistory, setTabHistory] = useState<NavigationTab[]>([]);
   const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    const restoreTab = () => {
+      setActiveTabRaw(readTabFromUrl());
+      setTabHistory([]);
+    };
+    window.addEventListener('popstate', restoreTab);
+    return () => window.removeEventListener('popstate', restoreTab);
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated || isDataLoading || canOpenTab(activeTab, currentUser.role)) return;
+    setActiveTabRaw('dashboard');
+    setTabHistory([]);
+    const url = new URL(window.location.href);
+    url.searchParams.delete('page');
+    window.history.replaceState({ tab: 'dashboard' }, '', url);
+  }, [activeTab, currentUser.role, isAuthenticated, isDataLoading]);
 
   // Manual navigation (Sidebar click, Header shortcut) starts a fresh
   // "trail" — it doesn't count as a drill-down, so it clears history.
   const setActiveTab = (tab: NavigationTab) => {
+    if (!canOpenTab(tab, currentUser.role)) return;
     setTabHistory([]);
     setActiveTabRaw(tab);
+    if (tab !== activeTab) writeTabToUrl(tab);
   };
 
   // Drill-down navigation (e.g. clicking a Dashboard stat tile) — pushes
   // the current tab onto the history stack so "Back" can return to it.
   const navigateTo = (tab: NavigationTab) => {
+    if (!canOpenTab(tab, currentUser.role)) return;
     setTabHistory(prev => [...prev, activeTab]);
     setActiveTabRaw(tab);
+    if (tab !== activeTab) writeTabToUrl(tab);
   };
 
   const handleGoBack = () => {
@@ -84,6 +127,7 @@ const MainLayout: React.FC = () => {
     const previousTab = tabHistory[tabHistory.length - 1];
     setTabHistory(prev => prev.slice(0, -1));
     setActiveTabRaw(previousTab);
+    writeTabToUrl(previousTab);
   };
 
   // Firebase Auth resolves the "is anyone already signed in?" question

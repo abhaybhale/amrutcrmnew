@@ -20,18 +20,6 @@ export default defineConfig(() => {
     },
     build: {
       sourcemap: false,
-      rollupOptions: {
-        output: {
-          manualChunks(id) {
-            if (!id.includes('node_modules')) return undefined;
-            if (id.includes('/firebase/')) return 'firebase';
-            if (id.includes('/recharts/') || id.includes('/d3-')) return 'charts';
-            if (id.includes('/xlsx/') || id.includes('/papaparse/')) return 'imports';
-            if (id.includes('/@dnd-kit/') || id.includes('/motion/')) return 'interactions';
-            return 'vendor';
-          },
-        },
-      },
     },
   };
 });

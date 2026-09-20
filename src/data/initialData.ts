@@ -1328,7 +1328,7 @@ export const INITIAL_ORDERS: Order[] = [
     accountName: 'Tata Consultancy Services Ltd',
     contactId: 'cnt_1',
     contactName: 'Mahesh Kulkarni',
-    opportunityId: 'opp_prev_10',
+    opportunityId: '', // Historical order; its original opportunity is not in the seed dataset.
     opportunityTitle: 'TCS - Nagios XI Enterprise Renewal (500 Nodes)',
     salespersonId: 'usr_sales_rajesh',
     salespersonName: 'Rajesh Kumar',
@@ -1649,15 +1649,15 @@ export const INITIAL_WORKFLOWS: WorkflowDefinition[] = [
     name: 'CPQ Quote Approval & Deal Lifecycle Workflow',
     module: 'Quotes',
     startingState: 'Draft',
-    endStates: ['Customer Accepted', 'Customer Rejected', 'Expired', 'Revised / Superseded'],
+    endStates: ['Customer Accepted', 'Rejected', 'Expired', 'Customer Requested Revision'],
     allStates: [
       'Draft',
       'Pending Internal Approval',
       'Approved by Sales Manager',
       'Submitted to Customer',
       'Customer Accepted',
-      'Customer Rejected',
-      'Revised / Superseded',
+      'Rejected',
+      'Customer Requested Revision',
       'Expired'
     ],
     isActive: true,
@@ -1666,7 +1666,7 @@ export const INITIAL_WORKFLOWS: WorkflowDefinition[] = [
         fromState: 'Draft',
         toState: 'Pending Internal Approval',
         permittedRoles: ['Sales Person', 'Sales Manager', 'Sales Head', 'Managing Director', 'CRM Administrator'],
-        mandatoryFields: ['quoteNumber', 'clientName', 'totalClientPayableINR']
+        mandatoryFields: ['quoteNumber', 'accountName', 'grandTotal']
       },
       {
         fromState: 'Pending Internal Approval',
@@ -1677,6 +1677,11 @@ export const INITIAL_WORKFLOWS: WorkflowDefinition[] = [
         notificationMessage: 'Commercial pricing & margin approved for customer delivery.'
       },
       {
+        fromState: 'Pending Internal Approval',
+        toState: 'Rejected',
+        permittedRoles: ['Sales Manager', 'Sales Head', 'Managing Director', 'CRM Administrator']
+      },
+      {
         fromState: 'Approved by Sales Manager',
         toState: 'Submitted to Customer',
         permittedRoles: ['Sales Person', 'Sales Manager', 'Sales Head', 'Managing Director', 'CRM Administrator']
@@ -1685,16 +1690,16 @@ export const INITIAL_WORKFLOWS: WorkflowDefinition[] = [
         fromState: 'Submitted to Customer',
         toState: 'Customer Accepted',
         permittedRoles: ['Sales Person', 'Sales Manager', 'Sales Head', 'Managing Director', 'CRM Administrator'],
-        mandatoryFields: ['customerPoRef']
+        mandatoryFields: ['accountName']
       },
       {
         fromState: 'Submitted to Customer',
-        toState: 'Customer Rejected',
+        toState: 'Rejected',
         permittedRoles: ['Sales Person', 'Sales Manager', 'Sales Head', 'Managing Director', 'CRM Administrator']
       },
       {
         fromState: 'Submitted to Customer',
-        toState: 'Revised / Superseded',
+        toState: 'Customer Requested Revision',
         permittedRoles: ['Sales Person', 'Sales Manager', 'Sales Head', 'Managing Director', 'CRM Administrator']
       },
       {

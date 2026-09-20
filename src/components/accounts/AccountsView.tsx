@@ -31,7 +31,7 @@ export const AccountsView: React.FC = () => {
     contacts,
     accessibleOpportunities,
     accessibleOrders,
-    users,
+    allUsers,
     createAccount,
     updateAccount
   } = useCRM();
@@ -51,7 +51,7 @@ export const AccountsView: React.FC = () => {
     country: 'India',
     website: 'https://',
     annualRevenue: 5000000,
-    health: 'Green' as any,
+    relationshipHealth: 'Good' as Account['relationshipHealth'],
     installedProducts: ['Atlassian Jira Software Data Center', 'SonarQube Enterprise']
   });
 
@@ -76,7 +76,7 @@ export const AccountsView: React.FC = () => {
       country: createData.country,
       website: createData.website,
       annualRevenue: Number(createData.annualRevenue),
-      health: createData.health,
+      relationshipHealth: createData.relationshipHealth,
       installedProducts: createData.installedProducts
     });
     setShowCreateModal(false);
@@ -313,7 +313,7 @@ export const AccountsView: React.FC = () => {
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <span className="text-slate-400 block text-[11px]">Assigned Account Owner</span>
-                        <span className="font-semibold text-slate-900">{users.find(user => user.id === inspectingAccount.ownerId)?.name || 'Unassigned'}</span>
+                        <span className="font-semibold text-slate-900">{allUsers.find(user => user.id === inspectingAccount.ownerId)?.name || 'Unassigned'}</span>
                       </div>
                       <div>
                         <span className="text-slate-400 block text-[11px]">Annual Turnover</span>

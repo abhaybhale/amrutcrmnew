@@ -35,6 +35,9 @@ export const RoleManagementTab: React.FC = () => {
     badgeBg: 'bg-blue-50 text-blue-700 border-blue-200',
     permissions: {
       canViewAllLeads: false,
+      canViewAllOpportunities: false,
+      canViewAllAccounts: false,
+      canAssignLeads: false,
       canManageUsers: false,
       canConfigureWorkflows: false,
       canApproveQuotes: false,
@@ -63,6 +66,9 @@ export const RoleManagementTab: React.FC = () => {
       badgeBg: 'bg-blue-50 text-blue-700 border-blue-200',
       permissions: {
         canViewAllLeads: false,
+        canViewAllOpportunities: false,
+        canViewAllAccounts: false,
+        canAssignLeads: false,
         canManageUsers: false,
         canConfigureWorkflows: false,
         canApproveQuotes: false,
@@ -367,6 +373,9 @@ export const RoleManagementTab: React.FC = () => {
                         ...formData,
                         permissions: {
                           canViewAllLeads: !allChecked,
+                          canViewAllOpportunities: !allChecked,
+                          canViewAllAccounts: !allChecked,
+                          canAssignLeads: !allChecked,
                           canManageUsers: !allChecked,
                           canConfigureWorkflows: !allChecked,
                           canApproveQuotes: !allChecked,

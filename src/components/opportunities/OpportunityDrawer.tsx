@@ -293,8 +293,8 @@ export const OpportunityDrawer: React.FC<OpportunityDrawerProps> = ({
                 <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl">
                   <span className="text-slate-400 block text-[11px]">Identified Competitors</span>
                   <span className="font-semibold text-slate-800 text-xs block mt-1">
-                    {opportunity.competitors && opportunity.competitors.length > 0
-                      ? opportunity.competitors.join(', ')
+                    {opportunity.competitor
+                      ? opportunity.competitor
                       : 'None Identified'}
                   </span>
                 </div>
@@ -524,7 +524,7 @@ export const OpportunityDrawer: React.FC<OpportunityDrawerProps> = ({
                         <StatusBadge status={qt.status} size="sm" />
                       </div>
                       <div className="flex items-center justify-between pt-2 border-t border-slate-200 text-xs">
-                        <span className="text-slate-500">{qt.lineItems.length} Line Items</span>
+                        <span className="text-slate-500">{qt.items.length} Line Items</span>
                         <span className="font-bold text-slate-900">₹{(qt.grandTotal / 100000).toFixed(2)} Lakhs</span>
                       </div>
                     </div>

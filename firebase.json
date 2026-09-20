@@ -1,7 +1,7 @@
 {
   "functions": {
     "source": "functions",
-    "runtime": "nodejs20"
+    "runtime": "nodejs22"
   },
   "firestore": {
     "database": "ai-studio-amrutcrmenterpri-21d4b3fe-9d3a-40be-887c-3c3e44436203",

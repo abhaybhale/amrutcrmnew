@@ -360,6 +360,7 @@ export const WorkflowEngineView: React.FC = () => {
         }
       ]
     });
+    if (!created) return;
     setSelectedModule(created.module);
     setShowNewWorkflowModal(false);
     setNewWfName('');

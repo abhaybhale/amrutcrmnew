@@ -40,7 +40,7 @@ export const FieldAttributesTab: React.FC = () => {
   const [formData, setFormData] = useState({
     label: '',
     name: '',
-    module: 'Leads' as 'Leads' | 'Opportunities' | 'Accounts' | 'Contacts' | 'Quotes' | 'Orders',
+    module: 'Leads' as FieldAttribute['module'],
     type: 'text' as FieldAttributeType,
     mandatory: false,
     defaultValue: '',

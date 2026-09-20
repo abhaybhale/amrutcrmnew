@@ -352,9 +352,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             if (item.adminOnly) {
               return (
                 currentUser.role === 'CRM Administrator' ||
-                currentUser.role === 'Managing Director' ||
-                currentUser.role === 'Sales Head' ||
-                currentUser.role === 'Sales Manager'
+                currentUser.role === 'Managing Director'
               );
             }
             if (item.visibleForRoles) {

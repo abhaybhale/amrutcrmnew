@@ -324,6 +324,10 @@ export interface Opportunity {
   id: string;
   oppNumber: string;
   title: string;
+  description?: string;
+  notes?: string;
+  dealRegistrationStatus?: string;
+  dealRegistrationNumber?: string;
   accountId: string;
   accountName: string;
   primaryContactId: string;

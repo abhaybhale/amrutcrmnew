@@ -48,7 +48,8 @@ export const LeadsView: React.FC = () => {
     assignLead,
     convertLeadToOpportunity,
     searchCustomerHistory,
-    getFieldAccess
+    getFieldAccess,
+    showToast
   } = useCRM();
 
   const dndSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
@@ -277,6 +278,7 @@ export const LeadsView: React.FC = () => {
       if (inspectingLead) setInspectingLead(null);
     } catch (err) {
       console.error(err);
+      showToast(err instanceof Error ? err.message : 'Lead conversion failed.', 'error');
     }
   };
 

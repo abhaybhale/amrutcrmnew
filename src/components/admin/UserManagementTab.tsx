@@ -152,8 +152,8 @@ export const UserManagementTab: React.FC = () => {
 
   // Calculate active workload stats for a user
   const getUserWorkloadStats = (userId: string) => {
-    const userLeads = leads.filter(l => l.workingSalespersonId === userId || l.ownerId === userId).length;
-    const userOpps = opportunities.filter(o => o.salespersonId === userId || o.ownerId === userId).length;
+    const userLeads = leads.filter(l => l.workingSalespersonId === userId).length;
+    const userOpps = opportunities.filter(o => o.ownerId === userId).length;
     const userAccounts = accounts.filter(a => a.ownerId === userId).length;
     const directReports = allUsers.filter(u => u.reportingManagerId === userId).length;
     return { userLeads, userOpps, userAccounts, directReports, total: userLeads + userOpps + userAccounts + directReports };
@@ -871,7 +871,7 @@ export const UserManagementTab: React.FC = () => {
                   <div className="flex items-center justify-between">
                     <div>
                       <h4 className="text-sm font-bold text-slate-900">{vendor.name}</h4>
-                      <p className="text-[11px] text-slate-500">{vendor.category} OEM Partner</p>
+                      <p className="text-[11px] text-slate-500">{vendor.partnerLevel} OEM Partner</p>
                     </div>
                     <span className="px-2.5 py-1 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold">
                       {mappedUsers.length} Mapped

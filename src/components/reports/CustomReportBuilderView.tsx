@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import Papa from 'papaparse';
 import { useCRM } from '../../context/CRMContext';
 import {
   FileSpreadsheet,
@@ -27,7 +28,7 @@ export const CustomReportBuilderView: React.FC = () => {
   else if (selectedModule === 'Quotes') rawData = accessibleQuotes;
 
   // Group aggregation
-  const groupedSummary: Record<string, { count: number; totalValue: number }> = {};
+  const groupedSummary: Record<string, { count: number; totalValue: number }> = Object.create(null);
   rawData.forEach(item => {
     const key = item[groupBy] || item['status'] || 'Unassigned';
     const val = item.totalValue || item.grandTotal || 0;
@@ -39,31 +40,27 @@ export const CustomReportBuilderView: React.FC = () => {
   });
 
   const exportCSV = () => {
-    let csvContent = 'data:text/csv;charset=utf-8,';
+    let rows: Array<Array<string | number>> = [];
     if (selectedModule === 'Opportunities') {
-      csvContent += 'ID,Title,Account,Vendor,Stage,Value (INR),Expected Close,Owner\n';
-      accessibleOpportunities.forEach(o => {
-        csvContent += `"${o.id}","${o.title}","${o.accountName}","${o.vendorName}","${o.stage}",${o.totalValue},"${o.expectedCloseDate}","${o.ownerName}"\n`;
-      });
+      rows = [['ID', 'Title', 'Account', 'Vendor', 'Stage', 'Value (INR)', 'Expected Close', 'Owner'],
+        ...accessibleOpportunities.map(o => [o.id, o.title, o.accountName, o.vendorName, o.stage, o.totalValue, o.expectedCloseDate, o.ownerName])];
     } else if (selectedModule === 'Leads') {
-      csvContent += 'Lead#,Company,Contact,Vendor,Status,Estimated Value,Salesperson\n';
-      accessibleLeads.forEach(l => {
-        csvContent += `"${l.leadNumber}","${l.companyName}","${l.contactPerson}","${l.vendorName}","${l.status}",${l.estimatedValue},"${l.workingSalespersonName}"\n`;
-      });
+      rows = [['Lead#', 'Company', 'Contact', 'Vendor', 'Status', 'Estimated Value', 'Salesperson'],
+        ...accessibleLeads.map(l => [l.leadNumber, l.companyName, l.contactName, l.vendorName, l.status, l.expectedValue, l.workingSalespersonName])];
     } else {
-      csvContent += 'Group,Record Count,Total Value (INR)\n';
-      Object.entries(groupedSummary).forEach(([k, v]) => {
-        csvContent += `"${k}",${v.count},${v.totalValue}\n`;
-      });
+      rows = [['Group', 'Record Count', 'Total Value (INR)'],
+        ...Object.entries(groupedSummary).map(([k, v]) => [k, v.count, v.totalValue])];
     }
 
-    const encodedUri = encodeURI(csvContent);
+    const csvContent = Papa.unparse(rows, { escapeFormulae: true });
+    const url = URL.createObjectURL(new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }));
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
+    link.setAttribute('href', url);
     link.setAttribute('download', `Amrut_CRM_${selectedModule}_Report.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   return (

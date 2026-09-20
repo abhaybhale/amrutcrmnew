@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import Papa from 'papaparse';
-import * as XLSX from 'xlsx';
+import { readXlsxRows } from '../../lib/spreadsheetFiles';
 import { useCRM } from '../../context/CRMContext';
 import { useMarketing } from '../../context/MarketingContext';
 import { Campaign, CampaignChannel, DatasetSourceType, MarketingProject, ProjectStatus } from '../../types';
@@ -456,6 +456,10 @@ const ImportDatasetModal: React.FC<{ onClose: () => void; projects: MarketingPro
   };
 
   const handleFile = (file: File) => {
+    if (file.size > 20 * 1024 * 1024) {
+      window.alert('Import file exceeds the 20 MB limit.');
+      return;
+    }
     setFileName(file.name);
     const ext = file.name.split('.').pop()?.toLowerCase();
     if (ext === 'csv') {
@@ -464,16 +468,8 @@ const ImportDatasetModal: React.FC<{ onClose: () => void; projects: MarketingPro
         skipEmptyLines: true,
         complete: (results) => setParsedRows((results.data as Record<string, any>[]).map(mapRow))
       });
-    } else if (ext === 'xlsx' || ext === 'xls') {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const data = new Uint8Array(e.target?.result as ArrayBuffer);
-        const workbook = XLSX.read(data, { type: 'array' });
-        const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        const json = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: '' });
-        setParsedRows(json.map(mapRow));
-      };
-      reader.readAsArrayBuffer(file);
+    } else if (ext === 'xlsx') {
+      readXlsxRows(file).then(rows => setParsedRows(rows.map(mapRow))).catch(err => window.alert(`Spreadsheet import failed: ${err.message}`));
     }
   };
 
@@ -498,7 +494,7 @@ const ImportDatasetModal: React.FC<{ onClose: () => void; projects: MarketingPro
           <Upload className="w-6 h-6 text-slate-400" />
           <span className="text-xs font-semibold text-slate-600">{fileName || 'Click to upload a .csv or .xlsx file'}</span>
           <span className="text-[11px] text-slate-400">Columns auto-map: company, contact name, email, phone, title, industry, city, country</span>
-          <input type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} />
+          <input type="file" accept=".csv,.xlsx" className="hidden" onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} />
         </label>
 
         {parsedRows.length > 0 && (

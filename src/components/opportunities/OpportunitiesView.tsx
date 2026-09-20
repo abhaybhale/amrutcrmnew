@@ -49,10 +49,7 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
     allUsers,
     createOpportunity,
     updateOpportunity,
-    advanceOpportunityStage,
-    closeOpportunityWon,
-    closeOpportunityLost,
-    closeOpportunityShelved
+    advanceOpportunityStage
   } = useCRM();
 
   const dndSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
@@ -189,16 +186,20 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
     e.preventDefault();
     if (!targetOppForClosure) return;
 
+    let completed = false;
     if (closureOutcome === 'Won') {
-      closeOpportunityWon(
+      completed = advanceOpportunityStage(
         targetOppForClosure.id,
-        closureForm.customerPoNumber,
-        closureForm.customerPoDate,
-        closureForm.billingMilestones,
-        Number(closureForm.finalContractValue)
+        'Closed Won',
+        {
+          poRef: closureForm.customerPoNumber,
+          orderDate: closureForm.customerPoDate,
+          billingMilestones: closureForm.billingMilestones,
+          finalContractValue: Number(closureForm.finalContractValue)
+        }
       );
 
-      try {
+      if (completed) try {
         confetti({
           particleCount: 100,
           spread: 80,
@@ -206,21 +207,20 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
         });
       } catch (err) {}
     } else if (closureOutcome === 'Lost') {
-      closeOpportunityLost(
+      completed = advanceOpportunityStage(
         targetOppForClosure.id,
-        closureForm.lossReason,
-        closureForm.competitorName,
-        Number(closureForm.competitorPrice),
-        closureForm.lossNotes
+        'Closed Lost',
+        { reason: closureForm.lossReason, competitor: closureForm.competitorName, lossNotes: closureForm.lossNotes }
       );
     } else {
-      closeOpportunityShelved(
+      completed = advanceOpportunityStage(
         targetOppForClosure.id,
-        closureForm.shelvedReason,
-        closureForm.revisitDate
+        'Shelved / Budgeted',
+        { reason: closureForm.shelvedReason, revisitDate: closureForm.revisitDate }
       );
     }
 
+    if (!completed) return;
     setShowClosureWizard(false);
     if (inspectingOpp && inspectingOpp.id === targetOppForClosure.id) {
       setInspectingOpp(null);

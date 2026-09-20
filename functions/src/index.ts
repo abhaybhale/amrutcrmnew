@@ -14,26 +14,25 @@
 
 import { onRequest } from 'firebase-functions/v2/https';
 import Anthropic from '@anthropic-ai/sdk';
-import * as admin from 'firebase-admin';
-import { getFirestore } from 'firebase-admin/firestore';
+import { getApps, getApp, initializeApp } from 'firebase-admin/app';
+import { getAuth, type DecodedIdToken } from 'firebase-admin/auth';
+import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { randomUUID } from 'crypto';
 
-if (admin.apps.length === 0) {
-  admin.initializeApp();
-}
+const firebaseApp = getApps().length ? getApp() : initializeApp();
 
 const CORPORATE_EMAIL_DOMAIN = '@amrutsoftware.com';
 const FIRESTORE_DATABASE_ID = 'ai-studio-amrutcrmenterpri-21d4b3fe-9d3a-40be-887c-3c3e44436203';
-const crmDb = () => getFirestore(admin.app(), FIRESTORE_DATABASE_ID);
+const crmDb = () => getFirestore(firebaseApp, FIRESTORE_DATABASE_ID);
 
-async function requireUserAdministrator(req: any): Promise<admin.auth.DecodedIdToken> {
+async function requireUserAdministrator(req: any): Promise<DecodedIdToken> {
   const bearer = String(req.headers.authorization || '');
   const idToken = bearer.startsWith('Bearer ') ? bearer.slice(7) : '';
   if (!idToken) throw new Error('UNAUTHENTICATED');
 
-  const token = await admin.auth().verifyIdToken(idToken);
+  const token = await getAuth(firebaseApp).verifyIdToken(idToken);
   const email = String(token.email || '').toLowerCase();
-  if (email === 'abhay@amrutsoftware.com') return token;
+  if (email === 'abhay@amrutsoftware.com' && token.email_verified) return token;
 
   const mapping = await crmDb().collection('authProfiles').doc(token.uid).get();
   const crmUserId = String(mapping.data()?.crmUserId || token.uid);
@@ -59,7 +58,7 @@ export const authorizeCrmSession = onRequest(
       const idToken = bearer.startsWith('Bearer ') ? bearer.slice(7) : '';
       if (!idToken) throw new Error('Authentication token is required.');
 
-      const token = await admin.auth().verifyIdToken(idToken);
+      const token = await getAuth(firebaseApp).verifyIdToken(idToken);
       const email = String(token.email || '').trim().toLowerCase();
       const provider = String(token.firebase?.sign_in_provider || '');
       if (!email.endsWith(CORPORATE_EMAIL_DOMAIN) || (provider === 'google.com' && !token.email_verified)) {
@@ -69,7 +68,7 @@ export const authorizeCrmSession = onRequest(
 
       const db = crmDb();
       let users = await db.collection('users').where('email', '==', email).limit(2).get();
-      if (users.empty && email === 'abhay@amrutsoftware.com') {
+      if (users.empty && email === 'abhay@amrutsoftware.com' && token.email_verified) {
         await db.collection('users').doc(token.uid).set({
           id: token.uid,
           name: token.name || 'Abhay Bhalerao',
@@ -107,11 +106,21 @@ export const authorizeCrmSession = onRequest(
         return;
       }
 
-      await db.collection('authProfiles').doc(token.uid).set({
+      // Public Firebase Email/Password sign-up must not claim a staff
+      // profile by email alone. Trusted provisioned accounts have matching
+      // IDs; legacy accounts already have a server-created mapping.
+      const mappingRef = db.collection('authProfiles').doc(token.uid);
+      const existingMapping = await mappingRef.get();
+      if (token.uid !== crmUser.id && !token.email_verified && existingMapping.data()?.crmUserId !== crmUser.id) {
+        res.status(403).json({ success: false, message: 'Verify your corporate email before accessing CRM.' });
+        return;
+      }
+
+      await mappingRef.set({
         crmUserId: crmUser.id,
         email,
         provider: provider || 'unknown',
-        authorizedAt: admin.firestore.FieldValue.serverTimestamp()
+        authorizedAt: FieldValue.serverTimestamp()
       }, { merge: true });
 
       await crmUser.ref.update({
@@ -202,7 +211,7 @@ export const aiProxy = onRequest(
     const idToken = bearer.startsWith('Bearer ') ? bearer.slice(7) : '';
     try {
       if (!idToken) throw new Error('Missing token');
-      await admin.auth().verifyIdToken(idToken);
+      await getAuth(firebaseApp).verifyIdToken(idToken);
     } catch {
       res.status(401).json({ error: 'Authentication required' });
       return;
@@ -307,16 +316,34 @@ export const activateInvitedUser = onRequest(
         return;
       }
 
-      const storedCode = (userData.tempActivationCode || '').trim().toUpperCase();
+      const attemptRef = db.collection('activationAttempts').doc(userDoc.id);
       const submittedCode = activationCode.toUpperCase();
-      if (!storedCode || !submittedCode || storedCode !== submittedCode) {
-        res.status(403).json({ success: false, message: 'Invalid activation code entered. Please check the code sent in your invitation.' });
+      const activationAllowed = await db.runTransaction(async transaction => {
+        const [latestUser, attempts] = await Promise.all([transaction.get(userDoc.ref), transaction.get(attemptRef)]);
+        const state = attempts.data() || {};
+        const now = Date.now();
+        if (Number(state.blockedUntil || 0) > now) return false;
+        const storedCode = String(latestUser.data()?.tempActivationCode || '').trim().toUpperCase();
+        if (storedCode.length >= 20 && submittedCode && storedCode === submittedCode) {
+          transaction.delete(attemptRef);
+          return true;
+        }
+        const failures = Number(state.failures || 0) + 1;
+        transaction.set(attemptRef, {
+          failures: failures >= 5 ? 0 : failures,
+          blockedUntil: failures >= 5 ? now + 15 * 60 * 1000 : 0,
+          updatedAt: FieldValue.serverTimestamp()
+        });
+        return false;
+      });
+      if (!activationAllowed) {
+        res.status(403).json({ success: false, message: 'Invalid activation code or too many attempts. Wait 15 minutes if needed.' });
         return;
       }
 
       const uid = userDoc.id;
       try {
-        await admin.auth().createUser({ uid, email, password: newPassword, displayName: userData.name || email });
+        await getAuth(firebaseApp).createUser({ uid, email, password: newPassword, displayName: userData.name || email });
       } catch (err: any) {
         if (err?.code === 'auth/uid-already-exists' || err?.code === 'auth/email-already-exists') {
           res.status(409).json({ success: false, message: 'This account is already activated. Use password reset instead.' });
@@ -329,8 +356,8 @@ export const activateInvitedUser = onRequest(
       await userDoc.ref.update({
         isPasswordSet: true,
         accountStatus: 'Active',
-        tempActivationCode: admin.firestore.FieldValue.delete(),
-        passwordLastUpdated: admin.firestore.FieldValue.serverTimestamp()
+        tempActivationCode: FieldValue.delete(),
+        passwordLastUpdated: FieldValue.serverTimestamp()
       });
       res.status(200).json({ success: true });
     } catch (err: any) {
@@ -398,7 +425,7 @@ export const provisionUser = onRequest(
       const company = companyDoc.data() || {};
       const uid = `usr_${randomUUID().replace(/-/g, '')}`;
       const now = new Date().toISOString();
-      await admin.auth().createUser({ uid, email, displayName: name, emailVerified: false, disabled: false });
+      await getAuth(firebaseApp).createUser({ uid, email, displayName: name, emailVerified: false, disabled: false });
 
       try {
         const profile = {
@@ -441,7 +468,7 @@ export const provisionUser = onRequest(
         });
         await batch.commit();
       } catch (writeError) {
-        await admin.auth().deleteUser(uid).catch(() => undefined);
+        await getAuth(firebaseApp).deleteUser(uid).catch(() => undefined);
         throw writeError;
       }
 

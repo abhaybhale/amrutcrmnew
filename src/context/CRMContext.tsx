@@ -149,7 +149,7 @@ interface CRMContextType {
 
   createOpportunity: (oppData: Partial<Opportunity>) => Opportunity;
   updateOpportunity: (id: string, oppData: Partial<Opportunity>) => void;
-  advanceOpportunityStage: (id: string, nextStage: string, closureData?: { reason?: string; poRef?: string; orderDate?: string; competitor?: string }) => void;
+  advanceOpportunityStage: (id: string, nextStage: string, closureData?: { reason?: string; poRef?: string; orderDate?: string; competitor?: string; finalContractValue?: number; billingMilestones?: string; lossNotes?: string; revisitDate?: string }) => boolean;
 
   createAccount: (accData: Partial<Account>) => Account;
   updateAccount: (id: string, accData: Partial<Account>) => void;
@@ -207,7 +207,7 @@ interface CRMContextType {
 
   // Workflow Engine Methods
   updateWorkflow: (wfId: string, updatedWf: Partial<WorkflowDefinition>) => void;
-  createWorkflow: (wfData: Partial<WorkflowDefinition>) => WorkflowDefinition;
+  createWorkflow: (wfData: Partial<WorkflowDefinition>) => WorkflowDefinition | null;
   deleteWorkflow: (wfId: string) => void;
   resetWorkflowsToDefault: () => void;
   isRoleAuthorizedForTransition: (permittedRoles: string[], userRole: string) => boolean;
@@ -347,7 +347,24 @@ function healUsersList(list: User[]): User[] {
 }
 
 function healWorkflowsList(list: WorkflowDefinition[]): WorkflowDefinition[] {
-  return Array.isArray(list) ? list : [];
+  if (!Array.isArray(list)) return [];
+  // Older quote workflows used UI labels that were never Quote fields.
+  // Normalize them while reading so existing Firestore workflows remain usable.
+  return list.map(workflow => workflow.module === 'Quotes' ? {
+    ...workflow,
+    endStates: workflow.endStates.map(state => state === 'Customer Rejected' ? 'Rejected' : state === 'Revised / Superseded' ? 'Customer Requested Revision' : state),
+    allStates: workflow.allStates.map(state => state === 'Customer Rejected' ? 'Rejected' : state === 'Revised / Superseded' ? 'Customer Requested Revision' : state),
+    transitions: (workflow.transitions || []).map(transition => ({
+      ...transition,
+      fromState: transition.fromState === 'Customer Rejected' ? 'Rejected' : transition.fromState === 'Revised / Superseded' ? 'Customer Requested Revision' : transition.fromState,
+      toState: transition.toState === 'Customer Rejected' ? 'Rejected' : transition.toState === 'Revised / Superseded' ? 'Customer Requested Revision' : transition.toState,
+      mandatoryFields: transition.mandatoryFields?.map(field =>
+        field === 'clientName' ? 'accountName'
+          : field === 'totalClientPayableINR' ? 'grandTotal'
+            : field
+      ).filter(field => !(transition.toState === 'Customer Accepted' && field === 'customerPoRef'))
+    }))
+  } : workflow);
 }
 
 function healRolesList(list: RoleDefinition[]): RoleDefinition[] {
@@ -453,7 +470,7 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // so the app never queries Firestore before Firebase Auth has confirmed
   // a signed-in user (the security rules require request.auth != null).
   // --------------------------------------------------------------------
-  const [rawUsers, setUsers] = useSyncedCollection<User>('users', INITIAL_USERS, isAuthenticated);
+  const [rawUsers, setUsers, usersLoading] = useSyncedCollection<User>('users', INITIAL_USERS, isAuthenticated);
   const users = useMemo(() => healUsersList(rawUsers), [rawUsers]);
 
   const [accounts, setAccounts, accountsLoading] = useSyncedCollection<Account>('accounts', INITIAL_ACCOUNTS, isAuthenticated);
@@ -466,7 +483,7 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [orders, setOrders] = useSyncedCollection<Order>('orders', INITIAL_ORDERS, isAuthenticated);
   const [vendors, setVendors] = useSyncedCollection<Vendor>('vendors', INITIAL_VENDORS, isAuthenticated);
 
-  const [rawWorkflows, setWorkflows] = useSyncedCollection<WorkflowDefinition>('workflows', INITIAL_WORKFLOWS, isAuthenticated);
+  const [rawWorkflows, setWorkflows, workflowsLoading] = useSyncedCollection<WorkflowDefinition>('workflows', INITIAL_WORKFLOWS, isAuthenticated);
   const workflows = useMemo(() => healWorkflowsList(rawWorkflows), [rawWorkflows]);
 
   const [auditLogs, setAuditLogs] = useSyncedCollection<AuditLog>('auditLogs', INITIAL_AUDIT_LOGS, isAuthenticated);
@@ -517,7 +534,7 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // True while the initial Firestore snapshots for the core sales pipeline
   // are still loading, after a successful sign-in. Lets the UI show a
   // brief loading state instead of a flash of empty data.
-  const isDataLoading = isAuthenticated && (accountsLoading || contactsLoading || leadsLoading || opportunitiesLoading);
+  const isDataLoading = isAuthenticated && (usersLoading || accountsLoading || contactsLoading || leadsLoading || opportunitiesLoading || workflowsLoading);
 
   const currentUser = useMemo<User>(() => {
     const matched = users.find(u => u.email.toLowerCase() === firebaseUserEmail) || users.find(u => u.id === currentUserId);
@@ -1033,6 +1050,13 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const updateLead = (id: string, leadData: Partial<Lead>) => {
     const target = leads.find(l => l.id === id);
     if (!target) return;
+    if (leadData.status && leadData.status !== target.status) {
+      const validation = validateWorkflowTransition('Leads', target.status, leadData.status, currentUser.role, { ...target, ...leadData });
+      if (!validation.allowed || validation.requiresApproval) {
+        showToast(validation.requiresApproval ? 'This stage needs approval before it can be changed.' : validation.reason || 'Lead stage change is not permitted.', 'error');
+        return;
+      }
+    }
 
     setLeads(prev => prev.map(l => {
       if (l.id === id) {
@@ -1078,6 +1102,13 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   ): Opportunity => {
     const lead = leads.find(l => l.id === leadId);
     if (!lead) throw new Error('Lead not found');
+    if (lead.convertedOpportunityId || lead.status === 'Converted') throw new Error('This lead has already been converted.');
+    if (lead.status !== 'Qualified – Convert to Opportunity') {
+      const qualification = validateWorkflowTransition('Leads', lead.status, 'Qualified – Convert to Opportunity', currentUser.role, lead);
+      if (!qualification.allowed || qualification.requiresApproval) throw new Error(qualification.reason || 'Qualify this lead before converting it.');
+    }
+    const conversion = validateWorkflowTransition('Leads', 'Qualified – Convert to Opportunity', 'Converted', currentUser.role, lead);
+    if (!conversion.allowed || conversion.requiresApproval) throw new Error(conversion.reason || 'Lead conversion is not permitted from its current stage.');
 
     // 1. Resolve Account
     let finalAccountId = accountChoice.accountId;
@@ -1303,6 +1334,10 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const updateOpportunity = (id: string, oppData: Partial<Opportunity>) => {
     const target = opportunities.find(o => o.id === id);
     if (!target) return;
+    if (oppData.stage && oppData.stage !== target.stage) {
+      advanceOpportunityStage(id, oppData.stage);
+      return;
+    }
 
     setOpportunities(prev => prev.map(o => {
       if (o.id === id) {
@@ -1329,10 +1364,30 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const advanceOpportunityStage = (
     id: string, 
     nextStage: string, 
-    closureData?: { reason?: string; poRef?: string; orderDate?: string; competitor?: string }
+    closureData?: { reason?: string; poRef?: string; orderDate?: string; competitor?: string; finalContractValue?: number; billingMilestones?: string; lossNotes?: string; revisitDate?: string }
   ) => {
     const opp = opportunities.find(o => o.id === id);
-    if (!opp) return;
+    if (!opp) return false;
+    if (opp.stage === nextStage) return false;
+    const finalValue = closureData?.finalContractValue && closureData.finalContractValue > 0
+      ? closureData.finalContractValue : opp.totalValue;
+    const nextRecord = {
+      ...opp,
+      customerPoRef: closureData?.poRef || opp.customerPoRef,
+      orderDate: closureData?.orderDate || opp.orderDate,
+      closureReason: closureData?.reason || opp.closureReason,
+      competitor: closureData?.competitor || opp.competitor,
+      totalValue: finalValue
+    };
+    const validation = validateWorkflowTransition('Opportunities', opp.stage, nextStage, currentUser.role, nextRecord);
+    if (!validation.allowed || validation.requiresApproval) {
+      showToast(validation.requiresApproval ? 'This stage needs approval before it can be changed.' : validation.reason || 'Opportunity stage change is not permitted.', 'error');
+      return false;
+    }
+    if (nextStage === 'Closed Won' && orders.some(order => order.opportunityId === id)) {
+      showToast('An order already exists for this opportunity. Review it before closing the deal.', 'error');
+      return false;
+    }
 
     let prob = opp.probability;
     let forecastCat = opp.forecastCategory;
@@ -1357,10 +1412,15 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           stage: nextStage as any,
           probability: prob,
           forecastCategory: forecastCat,
-          customerPoRef: closureData?.poRef || o.customerPoRef,
-          orderDate: closureData?.orderDate || o.orderDate,
-          closureReason: closureData?.reason || o.closureReason,
-          competitor: closureData?.competitor || o.competitor,
+          customerPoRef: nextRecord.customerPoRef,
+          orderDate: nextRecord.orderDate,
+          closureReason: nextRecord.closureReason,
+          competitor: nextRecord.competitor,
+          totalValue: finalValue,
+          softwareValue: o.softwareValue + (finalValue - o.totalValue),
+          weightedValue: Math.round(finalValue * prob / 100),
+          lossAnalysis: closureData?.lossNotes || o.lossAnalysis,
+          reactivationDate: closureData?.revisitDate || o.reactivationDate,
           modifiedDate: new Date().toISOString()
         };
       }
@@ -1389,15 +1449,17 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         vendorName: opp.vendorName,
         product: opp.product,
         currency: 'INR (₹)',
-        softwareAmount: opp.softwareValue,
+        softwareAmount: opp.softwareValue + (finalValue - opp.totalValue),
         servicesAmount: opp.servicesValue,
-        totalAmount: opp.totalValue,
+        totalAmount: finalValue,
         grossMarginAmount: opp.grossMarginValue,
         termMonths: 12,
         startDate: new Date().toISOString().split('T')[0],
         endDate: new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString().split('T')[0],
         billingStatus: 'Pending Invoice',
         deliveryStatus: 'Licenses Issued',
+        status: 'PO Received – Verification',
+        billingMilestones: closureData?.billingMilestones,
         renewalDate: new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString().split('T')[0],
         renewalRecordCreated: true,
         notes: `Order created automatically from Closed Won Opportunity ${opp.oppNumber}`,
@@ -1445,6 +1507,7 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       });
       showToast(`Stage updated to ${nextStage}`, 'info');
     }
+    return true;
   };
 
   const createAccount = (accData: Partial<Account>): Account => {
@@ -1692,6 +1755,23 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const updateQuote = (id: string, quoteData: Partial<Quote>) => {
+    const target = quotes.find(q => q.id === id);
+    if (!target) return;
+    if (quoteData.status && quoteData.status !== target.status) {
+      if (quoteData.status === 'Approved by Sales Manager') {
+        showToast('Use the approval action to approve a quote.', 'error');
+        return;
+      }
+      if (target.approvalRequired && !target.approvedById && quoteData.status === 'Submitted to Customer') {
+        showToast('This quote needs internal approval before submission.', 'error');
+        return;
+      }
+      const validation = validateWorkflowTransition('Quotes', target.status, quoteData.status, currentUser.role, { ...target, ...quoteData });
+      if (!validation.allowed || validation.requiresApproval) {
+        showToast(validation.requiresApproval ? 'This quote needs approval before the status can change.' : validation.reason || 'Quote status change is not permitted.', 'error');
+        return;
+      }
+    }
     setQuotes(prev => prev.map(q => q.id === id ? { ...q, ...quoteData } : q));
     showToast(`Quote updated`, 'info');
   };
@@ -1699,6 +1779,11 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const approveQuote = (quoteId: string) => {
     const q = quotes.find(item => item.id === quoteId);
     if (!q) return;
+    const permitted = ['Sales Manager', 'Sales Head', 'Managing Director', 'CRM Administrator'];
+    if (q.status !== 'Pending Internal Approval' || !permitted.includes(currentUser.role)) {
+      showToast('Only an authorized approver can approve a pending quote.', 'error');
+      return;
+    }
 
     setQuotes(prev => prev.map(item => {
       if (item.id === quoteId) {
@@ -1727,6 +1812,11 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const rejectQuote = (quoteId: string, reason: string) => {
     const q = quotes.find(item => item.id === quoteId);
     if (!q) return;
+    const permitted = ['Sales Manager', 'Sales Head', 'Managing Director', 'CRM Administrator'];
+    if (q.status !== 'Pending Internal Approval' || !permitted.includes(currentUser.role) || !reason.trim()) {
+      showToast('A pending quote and a reason are required for rejection by an authorized approver.', 'error');
+      return;
+    }
 
     setQuotes(prev => prev.map(item => {
       if (item.id === quoteId) {
@@ -1779,6 +1869,7 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       endDate: orderData.endDate || new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString().split('T')[0],
       billingStatus: orderData.billingStatus || 'Pending Invoice',
       deliveryStatus: orderData.deliveryStatus || 'Licenses Issued',
+      status: orderData.status || 'PO Received – Verification',
       renewalDate: orderData.renewalDate || new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString().split('T')[0],
       renewalRecordCreated: true,
       notes: orderData.notes,
@@ -1800,6 +1891,18 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const updateOrder = (id: string, orderData: Partial<Order>) => {
+    const target = orders.find(o => o.id === id);
+    if (!target) return;
+    if (orderData.status && orderData.status !== target.status) {
+      const previousStatus = target.status === 'PO Received' ? 'PO Received – Verification' : target.status === 'Completed' ? 'Invoiced & Completed' : target.status || 'PO Received – Verification';
+      const nextStatus = orderData.status === 'PO Received' ? 'PO Received – Verification' : orderData.status === 'Completed' ? 'Invoiced & Completed' : orderData.status;
+      const validation = validateWorkflowTransition('Orders', previousStatus, nextStatus, currentUser.role, { ...target, ...orderData });
+      if (!validation.allowed || validation.requiresApproval) {
+        showToast(validation.requiresApproval ? 'This order stage needs approval.' : validation.reason || 'Order stage change is not permitted.', 'error');
+        return;
+      }
+      orderData = { ...orderData, status: nextStatus };
+    }
     setOrders(prev => prev.map(o => o.id === id ? { ...o, ...orderData } : o));
     showToast(`Order updated`, 'info');
   };
@@ -1847,10 +1950,6 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setLeads(prev => prev.map(lead => {
       let changed = false;
       const updated = { ...lead };
-      if (updated.ownerId === id || updated.ownerName === oldName) {
-        updated.ownerName = trimmed;
-        changed = true;
-      }
       if (updated.workingSalespersonId === id || updated.workingSalespersonName === oldName) {
         updated.workingSalespersonName = trimmed;
         changed = true;
@@ -1865,27 +1964,16 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         updated.ownerName = trimmed;
         changed = true;
       }
-      if (updated.salespersonId === id || updated.salespersonName === oldName) {
-        updated.salespersonName = trimmed;
-        changed = true;
-      }
       return changed ? updated : opp;
     }));
 
     setAccounts(prev => prev.map(acc => {
-      if (acc.ownerId === id || acc.ownerName === oldName) {
-        return { ...acc, ownerName: trimmed };
-      }
       return acc;
     }));
 
     setQuotes(prev => prev.map(q => {
       let changed = false;
       const updated = { ...q };
-      if (updated.preparedById === id || updated.preparedByName === oldName) {
-        updated.preparedByName = trimmed;
-        changed = true;
-      }
       if (updated.salespersonId === id || updated.salespersonName === oldName) {
         updated.salespersonName = trimmed;
         changed = true;
@@ -1896,10 +1984,6 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setPresalesRequests(prev => prev.map(p => {
       let changed = false;
       const updated = { ...p };
-      if (updated.requesterId === id || updated.requesterName === oldName) {
-        updated.requesterName = trimmed;
-        changed = true;
-      }
       if (updated.assignedConsultantId === id || updated.assignedConsultantName === oldName) {
         updated.assignedConsultantName = trimmed;
         changed = true;
@@ -1907,12 +1991,6 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return changed ? updated : p;
     }));
 
-    setPocRecords(prev => prev.map(poc => {
-      if (poc.assignedEngineerId === id || poc.assignedEngineerName === oldName) {
-        return { ...poc, assignedEngineerName: trimmed };
-      }
-      return poc;
-    }));
 
     setOrders(prev => prev.map(ord => {
       if (ord.salespersonId === id || ord.salespersonName === oldName) {
@@ -1979,16 +2057,12 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // 1. Transfer Leads
     if (options.leads !== false) {
       setLeads(prev => prev.map(lead => {
-        if (lead.workingSalespersonId === fromUserId || lead.ownerId === fromUserId) {
+        if (lead.workingSalespersonId === fromUserId) {
           leadsCount++;
           return {
             ...lead,
-            ownerId: toUserId,
-            ownerName: toUser.name,
             workingSalespersonId: toUserId,
-            workingSalespersonName: toUser.name,
-            salespersonId: toUserId,
-            salespersonName: toUser.name
+            workingSalespersonName: toUser.name
           };
         }
         return lead;
@@ -1998,14 +2072,12 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // 2. Transfer Opportunities
     if (options.opportunities !== false) {
       setOpportunities(prev => prev.map(opp => {
-        if (opp.salespersonId === fromUserId || opp.ownerId === fromUserId) {
+        if (opp.ownerId === fromUserId) {
           oppsCount++;
           return {
             ...opp,
             ownerId: toUserId,
-            ownerName: toUser.name,
-            salespersonId: toUserId,
-            salespersonName: toUser.name
+            ownerName: toUser.name
           };
         }
         return opp;
@@ -2423,7 +2495,7 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             lastLogin: 'Never',
             customFields: customFieldValues,
             isPasswordSet: false,
-            tempActivationCode: 'ACT-' + Math.floor(1000 + Math.random() * 9000),
+            tempActivationCode: 'ACT-' + Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('').toUpperCase(),
             accountStatus: 'Pending Activation'
           };
           newUsers.push(userObj);
@@ -2700,6 +2772,10 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const updateWorkflow = (wfId: string, updatedWf: Partial<WorkflowDefinition>) => {
+    if (currentUser.role !== 'CRM Administrator' && currentUser.role !== 'Managing Director') {
+      showToast('Only administrators can change workflows.', 'error');
+      return;
+    }
     setWorkflows(prev => prev.map(w => w.id === wfId ? { ...w, ...updatedWf } : w));
     addAuditLog({
       module: 'Workflows',
@@ -2711,7 +2787,11 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     showToast(`Workflow updated successfully`, 'success');
   };
 
-  const createWorkflow = (wfData: Partial<WorkflowDefinition>): WorkflowDefinition => {
+  const createWorkflow = (wfData: Partial<WorkflowDefinition>): WorkflowDefinition | null => {
+    if (currentUser.role !== 'CRM Administrator' && currentUser.role !== 'Managing Director') {
+      showToast('Only administrators can create workflows.', 'error');
+      return null;
+    }
     const id = 'wf_' + Date.now();
     const newWf: WorkflowDefinition = {
       id,
@@ -2736,6 +2816,10 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const deleteWorkflow = (wfId: string) => {
+    if (currentUser.role !== 'CRM Administrator' && currentUser.role !== 'Managing Director') {
+      showToast('Only administrators can delete workflows.', 'error');
+      return;
+    }
     const target = workflows.find(w => w.id === wfId);
     if (!target) return;
     setWorkflows(prev => prev.filter(w => w.id !== wfId));
@@ -2763,7 +2847,7 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const isRoleAuthorizedForTransition = (permittedRoles: string[], userRole?: string): boolean => {
-    if (!permittedRoles || permittedRoles.length === 0) return true;
+    if (!permittedRoles || permittedRoles.length === 0) return false;
     if (permittedRoles.includes('ALL') || permittedRoles.includes('*')) return true;
     
     const safeRole = userRole || currentUser?.role || 'Sales Person';
@@ -2774,7 +2858,6 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const lowerPermitted = permittedRoles.map(r => (r || '').toLowerCase().trim());
     const lowerUser = (safeRole || '').toLowerCase().trim();
     if (lowerPermitted.includes(lowerUser)) return true;
-    if (lowerUser.includes('admin') || lowerUser.includes('managing director')) return true;
 
     // Sales role hierarchy
     if (
@@ -2829,12 +2912,9 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const findWorkflowForModule = (moduleName: string): WorkflowDefinition | undefined => {
     if (!moduleName) return undefined;
     const norm = moduleName.toLowerCase().trim();
-    return (
-      workflows.find(w => w.module?.toLowerCase().trim() === norm) ||
-      workflows.find(w => w.id?.toLowerCase().trim() === norm) ||
-      workflows.find(w => w.module?.toLowerCase().includes(norm) || norm.includes(w.module?.toLowerCase() || '')) ||
-      workflows.find(w => w.name?.toLowerCase().includes(norm))
-    );
+    return workflows.find(w => w.module?.toLowerCase().trim() === norm)
+      || workflows.find(w => w.id?.toLowerCase().trim() === norm)
+      || INITIAL_WORKFLOWS.find(w => w.module?.toLowerCase().trim() === norm);
   };
 
   const getAvailableWorkflowTransitions = (module: string, currentState: string, userRole?: string): WorkflowTransition[] => {
@@ -3121,7 +3201,8 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const targetUser = users.find(u => u.id === userId);
     const randomBytes = crypto.getRandomValues(new Uint8Array(16));
     const generatedCode = Array.from(randomBytes, byte => byte.toString(16).padStart(2, '0')).join('').toUpperCase();
-    const code = targetUser?.tempActivationCode || `ACT-${generatedCode}`;
+    const existingCode = targetUser?.tempActivationCode || '';
+    const code = existingCode.length >= 20 ? existingCode : `ACT-${generatedCode}`;
     
     // Update code if missing
     setUsers(prev => prev.map(u => u.id === userId ? { ...u, tempActivationCode: code } : u));
@@ -3823,10 +3904,20 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const updateRenewalStatus = (id: string, status: RenewalStatus) => {
+    const target = renewalRecords.find(r => r.id === id);
+    if (!target || (!canManageRenewals && target.salespersonId !== currentUser.id)) {
+      showToast('You can update only your assigned renewals.', 'error');
+      return;
+    }
     setRenewalRecords(prev => prev.map(r => (r.id === id ? { ...r, status, modifiedDate: new Date().toISOString() } : r)));
   };
 
   const updateRenewalRecord = (id: string, data: Partial<RenewalRecord>) => {
+    const target = renewalRecords.find(r => r.id === id);
+    if (!target || (!canManageRenewals && (target.salespersonId !== currentUser.id || Object.keys(data).some(key => key !== 'notes')))) {
+      showToast('You can edit only notes on your assigned renewals.', 'error');
+      return;
+    }
     setRenewalRecords(prev => prev.map(r => (r.id === id ? { ...r, ...data, modifiedDate: new Date().toISOString() } : r)));
   };
 
