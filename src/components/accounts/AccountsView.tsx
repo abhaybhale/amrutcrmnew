@@ -22,8 +22,10 @@ import {
   Calendar,
   UploadCloud,
   FileSpreadsheet,
-  Sparkles
+  Sparkles,
+  GitMerge
 } from 'lucide-react';
+import { mergeAccountsInto } from '../../lib/mergeAccounts';
 
 export const AccountsView: React.FC = () => {
   const {
@@ -33,7 +35,9 @@ export const AccountsView: React.FC = () => {
     accessibleOrders,
     allUsers,
     createAccount,
-    updateAccount
+    updateAccount,
+    currentUser,
+    showToast
   } = useCRM();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -43,6 +47,12 @@ export const AccountsView: React.FC = () => {
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [showMergeModal, setShowMergeModal] = useState(false);
+  const [mergeSearch, setMergeSearch] = useState('');
+  const [mergeSelection, setMergeSelection] = useState<Set<string>>(new Set());
+  const [mergeKeeperId, setMergeKeeperId] = useState('');
+  const [mergeBusy, setMergeBusy] = useState(false);
+  const canMerge = ['CRM Administrator', 'Managing Director', 'Sales Head', 'Sales Manager'].includes(currentUser.role);
   const [createData, setCreateData] = useState({
     name: '',
     industry: 'Banking & Financial Services',
@@ -82,6 +92,39 @@ export const AccountsView: React.FC = () => {
     setShowCreateModal(false);
   };
 
+  const toggleMergeAccount = (id: string) => setMergeSelection(previous => {
+    const next = new Set(previous);
+    if (next.has(id)) {
+      next.delete(id);
+      if (mergeKeeperId === id) setMergeKeeperId('');
+    } else {
+      next.add(id);
+      if (!mergeKeeperId) setMergeKeeperId(id);
+    }
+    return next;
+  });
+
+  const mergeAccounts = async () => {
+    const duplicates = [...mergeSelection].filter(id => id !== mergeKeeperId);
+    const keeper = accessibleAccounts.find(account => account.id === mergeKeeperId);
+    if (!keeper || !duplicates.length) return;
+    if (!window.confirm(`Merge ${duplicates.length} account(s) into "${keeper.name}"? All linked CRM records will be moved to the primary account.`)) return;
+
+    setMergeBusy(true);
+    try {
+      const movedReferences = await mergeAccountsInto(mergeKeeperId, duplicates);
+      showToast(`${duplicates.length} account(s) merged into ${keeper.name}. ${movedReferences} linked record(s) moved.`, 'success');
+      setShowMergeModal(false);
+      setMergeSelection(new Set());
+      setMergeKeeperId('');
+      setMergeSearch('');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Account merge failed', 'error');
+    } finally {
+      setMergeBusy(false);
+    }
+  };
+
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6 select-none animate-in fade-in duration-200">
       {/* Header */}
@@ -99,6 +142,15 @@ export const AccountsView: React.FC = () => {
         </div>
 
         <div className="flex items-center space-x-2">
+          {canMerge && (
+            <button
+              onClick={() => setShowMergeModal(true)}
+              className="px-3.5 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all cursor-pointer"
+            >
+              <GitMerge className="w-4 h-4" />
+              <span>Merge Similar</span>
+            </button>
+          )}
           <button
             onClick={() => setShowImportModal(true)}
             className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all cursor-pointer shadow-xs"
@@ -116,6 +168,53 @@ export const AccountsView: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {showMergeModal && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4">
+          <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Merge Similar Accounts</h2>
+                <p className="text-xs text-slate-500">Select matching accounts and mark the account to retain as Primary.</p>
+              </div>
+              <button onClick={() => setShowMergeModal(false)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <input
+              value={mergeSearch}
+              onChange={event => setMergeSearch(event.target.value)}
+              placeholder="Search similar account names…"
+              className="mt-4 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+            />
+            <div className="mt-3 max-h-[52vh] overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100">
+              {accessibleAccounts
+                .filter(account => !mergeSearch.trim() || account.name.toLowerCase().includes(mergeSearch.trim().toLowerCase()))
+                .map(account => (
+                  <label key={account.id} className={`flex cursor-pointer items-center gap-3 p-3 hover:bg-slate-50 ${mergeSelection.has(account.id) ? 'bg-indigo-50' : ''}`}>
+                    <input type="checkbox" checked={mergeSelection.has(account.id)} onChange={() => toggleMergeAccount(account.id)} />
+                    <input type="radio" name="primaryAccount" disabled={!mergeSelection.has(account.id)} checked={mergeKeeperId === account.id} onChange={() => setMergeKeeperId(account.id)} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-slate-900">{account.name}</p>
+                      <p className="text-xs text-slate-500">{account.city || 'No city'} · {account.tier}</p>
+                    </div>
+                    {mergeKeeperId === account.id && <span className="rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-bold text-emerald-700">PRIMARY</span>}
+                  </label>
+                ))}
+            </div>
+            <div className="mt-4 flex items-center justify-between">
+              <span className="text-xs text-slate-500">{mergeSelection.size} selected</span>
+              <div className="flex gap-2">
+                <button onClick={() => setShowMergeModal(false)} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold">Cancel</button>
+                <button disabled={mergeBusy || mergeSelection.size < 2 || !mergeKeeperId} onClick={() => void mergeAccounts()} className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40">
+                  <GitMerge className="h-4 w-4" />
+                  {mergeBusy ? 'Merging…' : 'Merge accounts'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Toolbar */}
       <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-3 text-xs">
