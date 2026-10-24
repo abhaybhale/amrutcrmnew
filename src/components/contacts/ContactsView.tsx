@@ -23,6 +23,7 @@ export const ContactsView: React.FC = () => {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRoleFilter, setSelectedRoleFilter] = useState('ALL');
+  const [viewMode, setViewMode] = useState<'cards' | 'table'>('table');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
 
@@ -42,12 +43,12 @@ export const ContactsView: React.FC = () => {
     const matchesSearch =
       !q ||
       (c.name || '').toLowerCase().includes(q) ||
-      (c.accountName || '').toLowerCase().includes(q) ||
+      (c.accountNames?.join(' ') || c.accountName || '').toLowerCase().includes(q) ||
       (c.email || '').toLowerCase().includes(q) ||
       (c.designation || '').toLowerCase().includes(q);
     const matchesRole = selectedRoleFilter === 'ALL' || c.roleInBuying === selectedRoleFilter;
     return matchesSearch && matchesRole;
-  });
+  }).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 
   const handleCreateContact = (e: React.FormEvent) => {
     e.preventDefault();
@@ -78,12 +79,12 @@ export const ContactsView: React.FC = () => {
   ];
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6 select-none animate-in fade-in duration-200">
+    <div className="p-6 max-w-7xl mx-auto space-y-6 animate-in fade-in duration-200">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <div className="flex items-center space-x-2">
-            <h1 className="text-2xl font-black text-slate-900 tracking-tight">Contacts Directory</h1>
+            <h1 className="text-2xl font-black text-slate-900 tracking-tight">Contacts</h1>
             <span className="bg-indigo-100 text-indigo-800 text-xs font-bold px-2.5 py-0.5 rounded-full">
               {filteredContacts.length} Stakeholders
             </span>
@@ -155,7 +156,9 @@ export const ContactsView: React.FC = () => {
       </div>
 
       {/* Contacts Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="flex justify-end gap-1 text-xs"><button onClick={() => setViewMode('table')} className={`rounded-lg px-3 py-1.5 ${viewMode === 'table' ? 'bg-indigo-600 text-white' : 'bg-white text-slate-600'}`}>Table</button><button onClick={() => setViewMode('cards')} className={`rounded-lg px-3 py-1.5 ${viewMode === 'cards' ? 'bg-indigo-600 text-white' : 'bg-white text-slate-600'}`}>Cards</button></div>
+      {viewMode === 'table' && <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white"><table className="w-full text-left text-sm"><thead className="bg-slate-50 text-slate-600"><tr><th className="px-4 py-3">Contact</th><th className="px-4 py-3">Account</th><th className="px-4 py-3">Email</th><th className="px-4 py-3">Phone</th><th className="px-4 py-3">Role</th></tr></thead><tbody className="divide-y divide-slate-100">{filteredContacts.map(contact => <tr key={contact.id}><td className="px-4 py-3 font-semibold">{contact.name}</td><td className="px-4 py-3">{contact.accountNames?.join(', ') || contact.accountName}</td><td className="px-4 py-3"><a href={`mailto:${contact.email}`} className="text-indigo-600 hover:underline">{contact.email}</a></td><td className="px-4 py-3">{contact.phone}</td><td className="px-4 py-3">{contact.roleInBuying}</td></tr>)}</tbody></table></div>}
+      {viewMode === 'cards' && <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {filteredContacts.map((cnt) => (
           <div
             key={cnt.id}
@@ -182,7 +185,7 @@ export const ContactsView: React.FC = () => {
               <div className="mt-3 pt-3 border-t border-slate-100 space-y-1.5 text-xs">
                 <div className="flex items-center space-x-2 text-slate-700">
                   <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                  <span className="font-semibold truncate">{cnt.accountName}</span>
+                  <span className="font-semibold truncate">{cnt.accountNames?.join(', ') || cnt.accountName}</span>
                 </div>
                 <div className="flex items-center space-x-2 text-indigo-600">
                   <Mail className="w-3.5 h-3.5 text-slate-400 shrink-0" />
@@ -201,7 +204,7 @@ export const ContactsView: React.FC = () => {
             </div>
           </div>
         ))}
-      </div>
+      </div>}
 
       {/* CREATE MODAL */}
       {showCreateModal && (

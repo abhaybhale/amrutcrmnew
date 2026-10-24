@@ -206,8 +206,12 @@ export async function provisionUserAccount(profile: Record<string, unknown>): Pr
     if (!response.ok || !body.success) {
       return { success: false, message: body.message || `User provisioning failed (${response.status}).` };
     }
-    await sendPasswordResetEmail(auth, String(profile.email));
-    return { success: true, userId: body.userId, message: `Password setup email sent to ${profile.email}.` };
+    try {
+      await sendPasswordResetEmail(auth, String(profile.email));
+      return { success: true, userId: body.userId, message: `Staff account created. Password setup email sent to ${profile.email}.` };
+    } catch (emailError: any) {
+      return { success: true, userId: body.userId, message: `Staff account created, but the password setup email could not be sent: ${friendlyAuthError(emailError)}. Use Reset Password for this user.` };
+    }
   } catch (err: any) {
     return { success: false, message: friendlyAuthError(err) };
   }

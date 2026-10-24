@@ -25,6 +25,7 @@ export const FinanceView: React.FC = () => {
   const { accessibleInvoices, accessiblePayments, accessibleExpenses, createInvoiceFromOrder, recordPayment, arAgingBuckets, revenueSummary } = useFinance();
 
   const [tab, setTab] = useState<'invoices' | 'payments' | 'aging' | 'expenses'>('invoices');
+  const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
   const [payModalInvoiceId, setPayModalInvoiceId] = useState<string | null>(null);
 
   const ordersWithoutInvoice = orders.filter(o => !accessibleInvoices.some(i => i.orderId === o.id));
@@ -54,8 +55,15 @@ export const FinanceView: React.FC = () => {
         <StatCard icon={<TrendingUp className="w-4 h-4 text-amber-600" />} label="Outstanding" value={money(revenueSummary.totalOutstanding)} />
         <StatCard icon={<AlertTriangle className="w-4 h-4 text-rose-600" />} label="Overdue Invoices" value={String(revenueSummary.overdueCount)} danger={revenueSummary.overdueCount > 0} />
       </div>
+      <div className="flex justify-end gap-2 text-sm"><button onClick={() => setViewMode('table')} className={`rounded-lg px-4 py-2 ${viewMode === 'table' ? 'bg-slate-900 text-white' : 'bg-white'}`}>Table</button><button onClick={() => setViewMode('cards')} className={`rounded-lg px-4 py-2 ${viewMode === 'cards' ? 'bg-slate-900 text-white' : 'bg-white'}`}>Cards</button></div>
+      {viewMode === 'table' && <div className="overflow-x-auto rounded-xl border bg-white"><table className="w-full text-left text-xs"><thead className="bg-slate-50"><tr>{(tab === 'invoices' ? ['Invoice','Account','Due','Total','Balance','Status','Action'] : tab === 'payments' ? ['Invoice','Account','Received','Method','Amount'] : tab === 'expenses' ? ['Description','Category','Date','Status','Amount'] : ['Age bucket','Invoices','Outstanding']).map(header => <th key={header} className="p-3">{header}</th>)}</tr></thead><tbody>
+        {tab === 'invoices' && accessibleInvoices.map(invoice => <tr key={invoice.id} className="border-t"><td className="p-3 font-semibold">{invoice.invoiceNumber}</td><td className="p-3">{invoice.accountName}</td><td className="p-3">{invoice.dueDate}</td><td className="p-3">{money(invoice.grandTotal, invoice.currency)}</td><td className="p-3">{money(invoice.balanceDue, invoice.currency)}</td><td className="p-3">{invoice.status}</td><td className="p-3">{invoice.balanceDue > 0 && <button onClick={() => setPayModalInvoiceId(invoice.id)} className="font-semibold text-emerald-700">Record payment</button>}</td></tr>)}
+        {tab === 'payments' && accessiblePayments.map(payment => <tr key={payment.id} className="border-t"><td className="p-3">{payment.invoiceNumber}</td><td className="p-3 font-semibold">{payment.accountName}</td><td className="p-3">{payment.receivedDate}</td><td className="p-3">{payment.method}</td><td className="p-3">{money(payment.amount, payment.currency)}</td></tr>)}
+        {tab === 'expenses' && accessibleExpenses.map(expense => <tr key={expense.id} className="border-t"><td className="p-3 font-semibold">{expense.description}</td><td className="p-3">{expense.category}</td><td className="p-3">{expense.incurredDate}</td><td className="p-3">{expense.status}</td><td className="p-3">{money(expense.amount, expense.currency)}</td></tr>)}
+        {tab === 'aging' && arAgingBuckets.map(bucket => <tr key={bucket.label} className="border-t"><td className="p-3 font-semibold">{bucket.label}</td><td className="p-3">{bucket.invoices.length}</td><td className="p-3">{money(bucket.total)}</td></tr>)}
+      </tbody></table></div>}
 
-      {tab === 'invoices' && (
+      {viewMode === 'cards' && tab === 'invoices' && (
         <div className="space-y-4">
           {ordersWithoutInvoice.length > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -106,7 +114,7 @@ export const FinanceView: React.FC = () => {
         </div>
       )}
 
-      {tab === 'payments' && (
+      {viewMode === 'cards' && tab === 'payments' && (
         <div className="space-y-3">
           {accessiblePayments.map(p => (
             <div key={p.id} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
@@ -123,7 +131,7 @@ export const FinanceView: React.FC = () => {
         </div>
       )}
 
-      {tab === 'aging' && (
+      {viewMode === 'cards' && tab === 'aging' && (
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
           {arAgingBuckets.map(bucket => (
             <div key={bucket.label} className={`bg-white p-4 rounded-2xl border shadow-xs space-y-3 ${bucket.total > 0 && bucket.minDays >= 61 ? 'border-rose-200' : 'border-slate-200'}`}>
@@ -146,7 +154,7 @@ export const FinanceView: React.FC = () => {
         </div>
       )}
 
-      {tab === 'expenses' && (
+      {viewMode === 'cards' && tab === 'expenses' && (
         <div className="space-y-3">
           {accessibleExpenses.map(exp => (
             <div key={exp.id} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">

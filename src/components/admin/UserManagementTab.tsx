@@ -51,6 +51,7 @@ export const UserManagementTab: React.FC = () => {
   const {
     allUsers,
     currentUser,
+    currentCompany,
     createUser,
     updateUser,
     renameUser,
@@ -127,6 +128,7 @@ export const UserManagementTab: React.FC = () => {
     vendorResponsibilities: [] as string[],
     primaryCompanyId: ''
   });
+  const [userSaveError, setUserSaveError] = useState('');
 
   const departments = [
     'Sales',
@@ -177,6 +179,7 @@ export const UserManagementTab: React.FC = () => {
   });
 
   const handleOpenAddModal = () => {
+    setUserSaveError('');
     const nextEmpId = `AS-${(allUsers.length + 201).toString()}`;
     setFormData({
       name: '',
@@ -191,7 +194,7 @@ export const UserManagementTab: React.FC = () => {
       eligibleForAutoAssignment: true,
       isOutOfOffice: false,
       vendorResponsibilities: [],
-      primaryCompanyId: companies[0]?.id || ''
+      primaryCompanyId: currentCompany.id || companies[0]?.id || ''
     });
     setShowAddModal(true);
   };
@@ -257,9 +260,14 @@ export const UserManagementTab: React.FC = () => {
 
   const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.name.trim() || !formData.email.trim()) return;
+    setUserSaveError('');
+    if (!formData.name.trim() || !formData.employeeId.trim() || !formData.email.trim() || !formData.primaryCompanyId) {
+      setUserSaveError('Name, employee ID, work email and company are required.');
+      return;
+    }
     const normalizedEmail = formData.email.trim().toLowerCase();
     if (!normalizedEmail.endsWith('@amrutsoftware.com')) {
+      setUserSaveError('Only @amrutsoftware.com email addresses can be added.');
       showToast('Only @amrutsoftware.com email addresses can be added.', 'error');
       return;
     }
@@ -282,6 +290,7 @@ export const UserManagementTab: React.FC = () => {
       setEditingUser(null);
     } else {
       setIsSavingUser(true);
+      try {
       const result = await createUser({
         name: formData.name,
         employeeId: formData.employeeId,
@@ -297,8 +306,13 @@ export const UserManagementTab: React.FC = () => {
         vendorResponsibilities: formData.vendorResponsibilities,
         primaryCompanyId: formData.primaryCompanyId
       });
-      setIsSavingUser(false);
       if (result.success) setShowAddModal(false);
+      else setUserSaveError(result.message || 'Could not create this staff account.');
+      } catch (error) {
+        setUserSaveError(error instanceof Error ? error.message : 'Could not create this staff account.');
+      } finally {
+        setIsSavingUser(false);
+      }
     }
   };
 
@@ -850,6 +864,10 @@ export const UserManagementTab: React.FC = () => {
       {/* VIEW 3: OEM VENDOR MAPPING MATRIX */}
       {activeTab === 'vendor_mapping' && (
         <div className="space-y-6">
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs text-slate-700 space-y-1">
+            <div><strong>Unassigned vendors:</strong> {vendors.filter(v => !allUsers.some(u => (u.vendorResponsibilities || []).includes(v.id))).map(v => v.name).sort((a, b) => a.localeCompare(b)).join(', ') || 'None'}</div>
+            <div><strong>Unassigned product targets:</strong> {vendors.filter(v => !(v.annualRevenueTarget > 0)).map(v => v.name).sort((a, b) => a.localeCompare(b)).join(', ') || 'None'}</div>
+          </div>
           <div className="bg-gradient-to-r from-indigo-50 via-purple-50 to-white p-5 rounded-2xl border border-indigo-100 flex items-center justify-between">
             <div>
               <h3 className="text-sm font-bold text-slate-900 flex items-center space-x-2">
@@ -863,7 +881,7 @@ export const UserManagementTab: React.FC = () => {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {vendors.map((vendor) => {
+            {[...vendors].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })).map((vendor) => {
               const mappedUsers = allUsers.filter(u => u.vendorResponsibilities && u.vendorResponsibilities.includes(vendor.id));
 
               return (
@@ -1325,7 +1343,7 @@ export const UserManagementTab: React.FC = () => {
                   OEM Partner Scope Responsibilities:
                 </label>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {vendors.map(v => {
+                  {[...vendors].sort((a, b) => a.name.localeCompare(b.name)).map(v => {
                     const isSelected = mappingData.vendorResponsibilities.includes(v.id);
                     return (
                       <label
@@ -1548,7 +1566,7 @@ export const UserManagementTab: React.FC = () => {
                   OEM Partner Head Responsibility (Grants Partner Scope Visibility)
                 </label>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {vendors.map(v => {
+                  {[...vendors].sort((a, b) => a.name.localeCompare(b.name)).map(v => {
                     const isSelected = formData.vendorResponsibilities.includes(v.id);
                     return (
                       <label
@@ -1576,6 +1594,7 @@ export const UserManagementTab: React.FC = () => {
                 </div>
               </div>
 
+              {userSaveError && <p role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">{userSaveError}</p>}
               <div className="flex items-center justify-end space-x-3 pt-4 border-t border-slate-100">
                 <button
                   type="button"

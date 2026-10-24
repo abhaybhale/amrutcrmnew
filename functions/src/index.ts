@@ -423,9 +423,26 @@ export const provisionUser = onRequest(
       }
 
       const company = companyDoc.data() || {};
-      const uid = `usr_${randomUUID().replace(/-/g, '')}`;
+      let uid = `usr_${randomUUID().replace(/-/g, '')}`;
+      let createdAuthUser = false;
       const now = new Date().toISOString();
-      await getAuth(firebaseApp).createUser({ uid, email, displayName: name, emailVerified: false, disabled: false });
+      try {
+        const existingAuth = await getAuth(firebaseApp).getUserByEmail(email);
+        if (existingAuth.disabled) {
+          res.status(409).json({ success: false, message: 'This Firebase account is disabled. Enable it before adding the CRM staff record.' });
+          return;
+        }
+        uid = existingAuth.uid;
+        const existingProfile = await db.collection('users').doc(uid).get();
+        if (existingProfile.exists) {
+          res.status(409).json({ success: false, message: 'This Firebase account already has a CRM staff record. Search User Management by email.' });
+          return;
+        }
+      } catch (lookupError: any) {
+        if (lookupError?.code !== 'auth/user-not-found') throw lookupError;
+        await getAuth(firebaseApp).createUser({ uid, email, displayName: name, emailVerified: false, disabled: false });
+        createdAuthUser = true;
+      }
 
       try {
         const profile = {
@@ -468,7 +485,7 @@ export const provisionUser = onRequest(
         });
         await batch.commit();
       } catch (writeError) {
-        await getAuth(firebaseApp).deleteUser(uid).catch(() => undefined);
+        if (createdAuthUser) await getAuth(firebaseApp).deleteUser(uid).catch(() => undefined);
         throw writeError;
       }
 

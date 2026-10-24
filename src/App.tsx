@@ -44,8 +44,8 @@ const TAB_LABELS: Record<NavigationTab, string> = {
   orders: 'Orders & Renewals',
   renewals: 'Renewal Board',
   presales: 'Presales & POC Flow',
-  accounts: 'Accounts & Clients',
-  contacts: 'Contacts Directory',
+  accounts: 'Accounts',
+  contacts: 'Contacts',
   vendors: 'OEM Partners & MDF',
   workspace: 'Google Workspace Sync',
   marketing: 'Marketing Hub',
@@ -221,8 +221,13 @@ const MainLayout: React.FC = () => {
           {activeTab === 'quotes' && <QuotesView />}
           {activeTab === 'orders' && <OrdersView />}
           {activeTab === 'renewals' && <RenewalBoard />}
-          {activeTab === 'accounts' && <AccountsView />}
-          {activeTab === 'contacts' && <ContactsView />}
+          {(activeTab === 'accounts' || activeTab === 'contacts') && <>
+            <div className="mx-6 mt-6 flex w-fit gap-1 rounded-xl border border-slate-200 bg-white p-1" role="tablist" aria-label="Accounts and contacts">
+              <button role="tab" aria-selected={activeTab === 'accounts'} onClick={() => navigateTo('accounts')} className={`rounded-lg px-5 py-2 text-sm font-semibold ${activeTab === 'accounts' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>Accounts</button>
+              <button role="tab" aria-selected={activeTab === 'contacts'} onClick={() => navigateTo('contacts')} className={`rounded-lg px-5 py-2 text-sm font-semibold ${activeTab === 'contacts' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>Contacts</button>
+            </div>
+            {activeTab === 'accounts' ? <AccountsView /> : <ContactsView />}
+          </>}
           {activeTab === 'presales' && <PresalesPOCView />}
           {activeTab === 'vendors' && <VendorsView />}
           {activeTab === 'workspace' && <div className="p-6 max-w-7xl mx-auto"><GoogleWorkspaceIntegrationTab /></div>}

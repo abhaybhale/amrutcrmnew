@@ -186,17 +186,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
       items: [
         {
           id: 'accounts' as NavigationTab,
-          label: 'Accounts & Clients',
+          label: 'Accounts & Contacts',
           icon: Building2,
           badge: accessibleAccounts.length,
           dotColor: 'bg-indigo-400'
-        },
-        {
-          id: 'contacts' as NavigationTab,
-          label: 'Contacts Directory',
-          icon: Users,
-          badge: null,
-          dotColor: 'bg-cyan-400'
         },
         {
           id: 'workspace' as NavigationTab,
@@ -373,7 +366,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
               {visibleItems.map((item) => {
                 const Icon = item.icon;
-                const isActive = activeTab === item.id;
+                const isActive = activeTab === item.id || (item.id === 'accounts' && activeTab === 'contacts');
 
                 return (
                   <button

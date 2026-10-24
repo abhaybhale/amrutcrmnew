@@ -47,6 +47,7 @@ export const MarketingHubView: React.FC = () => {
   } = useMarketing();
 
   const [tab, setTab] = useState<'overview' | 'projects' | 'campaigns' | 'datasets'>('overview');
+  const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [showCampaignModal, setShowCampaignModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -88,6 +89,14 @@ export const MarketingHubView: React.FC = () => {
         </div>
       </div>
 
+      {tab !== 'overview' && <div className="flex justify-end gap-2 text-sm"><button onClick={() => setViewMode('table')} className={`rounded-lg px-4 py-2 ${viewMode === 'table' ? 'bg-slate-900 text-white' : 'bg-white'}`}>Table</button><button onClick={() => setViewMode('cards')} className={`rounded-lg px-4 py-2 ${viewMode === 'cards' ? 'bg-slate-900 text-white' : 'bg-white'}`}>Cards</button></div>}
+      {viewMode === 'table' && tab !== 'overview' && <div className="overflow-x-auto rounded-xl border bg-white"><table className="w-full text-left text-xs"><thead className="bg-slate-50"><tr>{(tab === 'projects' ? ['Project','Status','Budget','Spend','Campaigns'] : tab === 'campaigns' ? ['Campaign','Status','Channel','Leads','Revenue'] : ['Dataset','Source','Records','Duplicates','Converted']).map(header => <th key={header} className="p-3">{header}</th>)}</tr></thead><tbody>
+        {tab === 'projects' && accessibleProjects.map(project => <tr key={project.id} className="border-t"><td className="p-3 font-semibold">{project.name}</td><td className="p-3">{project.status}</td><td className="p-3">{fmtMoney(project.budget, symbol)}</td><td className="p-3">{fmtMoney(project.spend, symbol)}</td><td className="p-3">{accessibleCampaigns.filter(campaign => campaign.projectId === project.id).length}</td></tr>)}
+        {tab === 'campaigns' && accessibleCampaigns.map(campaign => <tr key={campaign.id} className="border-t"><td className="p-3 font-semibold">{campaign.name}</td><td className="p-3">{campaign.status}</td><td className="p-3">{campaign.channel}</td><td className="p-3">{campaign.metrics.leadsGenerated}</td><td className="p-3">{fmtMoney(campaign.metrics.revenueInfluenced, symbol)}</td></tr>)}
+        {tab === 'datasets' && accessibleDatasets.map(dataset => <tr key={dataset.id} className="cursor-pointer border-t hover:bg-slate-50" onClick={() => setExpandedDatasetId(expandedDatasetId === dataset.id ? null : dataset.id)}><td className="p-3 font-semibold">{dataset.name}</td><td className="p-3">{dataset.sourceType}</td><td className="p-3">{dataset.totalRecords}</td><td className="p-3">{dataset.duplicateRecords}</td><td className="p-3">{dataset.convertedToLeadsCount}</td></tr>)}
+      </tbody></table></div>}
+      {viewMode === 'table' && tab === 'datasets' && expandedDatasetId && <div className="overflow-x-auto rounded-xl border bg-white"><table className="w-full text-left text-xs"><thead className="bg-slate-50"><tr>{['Contact','Company','Email','Status','Action'].map(header => <th key={header} className="p-3">{header}</th>)}</tr></thead><tbody>{getRecordsForDataset(expandedDatasetId).map(record => <tr key={record.id} className="border-t"><td className="p-3">{record.contactName}</td><td className="p-3">{record.companyName}</td><td className="p-3">{record.contactEmail}</td><td className="p-3">{record.status}</td><td className="p-3">{!['Converted to Lead','Duplicate','Invalid'].includes(record.status) && <button onClick={() => convertRecordToLead(record.id)} className="font-semibold text-pink-700">Convert to lead</button>}</td></tr>)}</tbody></table></div>}
+
       {/* Overview */}
       {tab === 'overview' && (
         <div className="space-y-6">
@@ -127,11 +136,11 @@ export const MarketingHubView: React.FC = () => {
               <Plus className="w-4 h-4" /> New Project
             </button>
           </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {viewMode === 'cards' && <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {accessibleProjects.map(p => (
               <ProjectCard key={p.id} project={p} symbol={symbol} campaignCount={accessibleCampaigns.filter(c => c.projectId === p.id).length} />
             ))}
-          </div>
+          </div>}
         </div>
       )}
 
@@ -143,11 +152,11 @@ export const MarketingHubView: React.FC = () => {
               <Plus className="w-4 h-4" /> New Campaign
             </button>
           </div>
-          <div className="space-y-3">
+          {viewMode === 'cards' && <div className="space-y-3">
             {accessibleCampaigns.map(c => (
               <CampaignRow key={c.id} campaign={c} symbol={symbol} onBump={() => updateCampaignMetrics(c.id, { leadsGenerated: c.metrics.leadsGenerated + 1 })} />
             ))}
-          </div>
+          </div>}
         </div>
       )}
 
@@ -159,7 +168,7 @@ export const MarketingHubView: React.FC = () => {
               <Upload className="w-4 h-4" /> Import Dataset
             </button>
           </div>
-          <div className="space-y-3">
+          {viewMode === 'cards' && <div className="space-y-3">
             {accessibleDatasets.map(ds => {
               const records = getRecordsForDataset(ds.id);
               const expanded = expandedDatasetId === ds.id;
@@ -207,7 +216,7 @@ export const MarketingHubView: React.FC = () => {
                 </div>
               );
             })}
-          </div>
+          </div>}
         </div>
       )}
 

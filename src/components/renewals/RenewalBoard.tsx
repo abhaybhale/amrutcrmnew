@@ -1,6 +1,8 @@
 import React, { useState, useRef } from 'react';
 import { useCRM } from '../../context/CRMContext';
 import { RenewalRecord, RenewalStatus } from '../../types';
+import Papa from 'papaparse';
+import { previewHistoricalOrders, type HistoricalImportPreview } from '../../lib/historicalRenewalImport';
 import { KanbanColumn, KanbanCard } from '../common/DragDropKanban';
 import { DndContext, DragEndEvent, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import {
@@ -41,21 +43,35 @@ export const RenewalBoard: React.FC = () => {
     updateRenewalRecord,
     reassignRenewal,
     deleteRenewalRecord,
-    bulkImportRenewalRecords
+    bulkImportRenewalRecords,
+    importHistoricalOrders,
+    accounts,
+    orders
   } = useCRM();
 
   const dndSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [viewMode, setViewMode] = useState<'table' | 'kanban'>('table');
   const [salespersonFilter, setSalespersonFilter] = useState(canManageRenewals ? 'ALL' : currentUser.id);
+  const [vendorFilter, setVendorFilter] = useState('ALL');
+  const [yearFilter, setYearFilter] = useState('ALL');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [productType, setProductType] = useState('ALL');
   const [inspecting, setInspecting] = useState<RenewalRecord | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
   const [csvText, setCsvText] = useState('');
   const [parsedRows, setParsedRows] = useState<Record<string, string>[] | null>(null);
   const [parseError, setParseError] = useState('');
+  const [historicalPreview, setHistoricalPreview] = useState<HistoricalImportPreview | null>(null);
+  const [includeInferredAccounts, setIncludeInferredAccounts] = useState(false);
+  const [importing, setImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const salespeople = allUsers.filter(u => u.role === 'Sales Person');
+  const salespeople = allUsers.filter(u => u.role === 'Sales Person').sort((a, b) => a.name.localeCompare(b.name));
+  const vendors = [...new Set(accessibleRenewals.map(record => record.vendorName).filter(Boolean))].sort((a, b) => a!.localeCompare(b!));
+  const years = [...new Set(accessibleRenewals.map(record => record.renewalDate.slice(0, 4)))].sort().reverse();
 
   const filteredRenewals = accessibleRenewals.filter(r => {
     const q = searchQuery.toLowerCase().trim();
@@ -66,7 +82,14 @@ export const RenewalBoard: React.FC = () => {
       r.product.toLowerCase().includes(q) ||
       r.salespersonName.toLowerCase().includes(q);
     const matchesSalesperson = salespersonFilter === 'ALL' || r.salespersonId === salespersonFilter;
-    return matchesSearch && matchesSalesperson;
+    const category = `${r.product} ${r.notes || ''}`.toLowerCase();
+    const isSupport = /support|service|maintenance|amc|implementation|consulting/.test(category);
+    return matchesSearch && matchesSalesperson
+      && (vendorFilter === 'ALL' || r.vendorName === vendorFilter)
+      && (yearFilter === 'ALL' || r.renewalDate.slice(0, 4) === yearFilter)
+      && (!fromDate || r.renewalDate >= fromDate)
+      && (!toDate || r.renewalDate <= toDate)
+      && (productType === 'ALL' || (productType === 'SUPPORT' ? isSupport : !isSupport));
   });
 
   const totalUpcomingValue = filteredRenewals
@@ -89,19 +112,28 @@ export const RenewalBoard: React.FC = () => {
   // ------------------------------------------------------------------
   const parseCsv = (text: string) => {
     setParseError('');
-    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-    if (lines.length < 2) {
-      setParseError('Paste (or upload) a CSV with a header row plus at least one data row.');
+    setHistoricalPreview(null);
+    setIncludeInferredAccounts(false);
+    const parsed = Papa.parse<Record<string, string>>(text.replace(/^\uFEFF/, ''), {
+      header: true, skipEmptyLines: 'greedy', transformHeader: header => header.trim()
+    });
+    const rows = parsed.data;
+    if (parsed.errors.length || !rows.length) {
+      setParseError(parsed.errors[0]?.message || 'Provide a CSV with a header and at least one data row.');
       setParsedRows(null);
       return;
     }
-    const headers = lines[0].split(',').map(h => h.trim());
-    const rows = lines.slice(1).map(line => {
-      const cells = line.split(',').map(c => c.trim());
-      const row: Record<string, string> = {};
-      headers.forEach((h, idx) => { row[h] = cells[idx] || ''; });
-      return row;
-    });
+    const headers = parsed.meta.fields || [];
+    if (headers.some(h => h.toLowerCase() === 'issue key')) {
+      if (!headers.some(h => h.toLowerCase() === 'created') || !headers.some(h => h.toLowerCase() === 'total order value')) {
+        setParseError('Jira order CSV requires Issue key, Created, and Total Order Value columns.');
+        setParsedRows(null);
+        return;
+      }
+      setHistoricalPreview(previewHistoricalOrders(rows, accounts, orders));
+      setParsedRows(rows);
+      return;
+    }
     if (!headers.some(h => h.toLowerCase().includes('account'))) {
       setParseError('Could not find an "accountName" column — check your CSV header row.');
       setParsedRows(null);
@@ -140,8 +172,25 @@ export const RenewalBoard: React.FC = () => {
   const findKey = (row: Record<string, string>, needle: string) =>
     Object.keys(row).find(k => k.toLowerCase().replace(/\s+/g, '') === needle.toLowerCase());
 
-  const handleConfirmImport = () => {
+  const handleConfirmImport = async () => {
     if (!parsedRows || parsedRows.length === 0) return;
+    if (historicalPreview) {
+      const ready = historicalPreview.ready.filter(row => includeInferredAccounts || !row.accountInferred);
+      if (!ready.length) return;
+      setImporting(true);
+      try {
+        await importHistoricalOrders(ready);
+        setShowImportModal(false);
+        setCsvText('');
+        setParsedRows(null);
+        setHistoricalPreview(null);
+      } catch (error) {
+        setParseError(error instanceof Error ? error.message : 'Import failed; retry the same file to resume safely.');
+      } finally {
+        setImporting(false);
+      }
+      return;
+    }
 
     const records = parsedRows.map(row => {
       const get = (needle: string) => {
@@ -173,7 +222,7 @@ export const RenewalBoard: React.FC = () => {
   };
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6 select-none animate-in fade-in duration-200">
+    <div className="p-6 max-w-7xl mx-auto space-y-6 animate-in fade-in duration-200">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -250,6 +299,16 @@ export const RenewalBoard: React.FC = () => {
       </div>
 
       {/* Kanban Board */}
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+        <select aria-label="Renewal vendor" value={vendorFilter} onChange={event => setVendorFilter(event.target.value)} className="rounded border bg-white p-2 text-xs"><option value="ALL">All vendors</option>{vendors.map(vendor => <option key={vendor}>{vendor}</option>)}</select>
+        <select aria-label="Renewal year" value={yearFilter} onChange={event => setYearFilter(event.target.value)} className="rounded border bg-white p-2 text-xs"><option value="ALL">All years</option>{years.map(year => <option key={year}>{year}</option>)}</select>
+        <input aria-label="Renewal from date" type="date" value={fromDate} onChange={event => setFromDate(event.target.value)} className="rounded border bg-white p-2 text-xs" />
+        <input aria-label="Renewal to date" type="date" value={toDate} onChange={event => setToDate(event.target.value)} className="rounded border bg-white p-2 text-xs" />
+        <select aria-label="Renewal product or support" value={productType} onChange={event => setProductType(event.target.value)} className="rounded border bg-white p-2 text-xs"><option value="ALL">Product and support</option><option value="PRODUCT">Product</option><option value="SUPPORT">Services / support</option></select>
+      </div>
+      <div className="flex justify-end gap-2 text-sm"><button onClick={() => setViewMode('table')} className={`rounded-lg px-4 py-2 ${viewMode === 'table' ? 'bg-slate-900 text-white' : 'bg-white'}`}>Table</button><button onClick={() => setViewMode('kanban')} className={`rounded-lg px-4 py-2 ${viewMode === 'kanban' ? 'bg-slate-900 text-white' : 'bg-white'}`}>Kanban</button></div>
+      {viewMode === 'table' && <div className="overflow-x-auto rounded-xl border bg-white"><table className="w-full text-left text-xs"><thead className="bg-slate-50"><tr>{['Account','Vendor','Product','Salesperson','Renewal date','Value','Status'].map(header => <th key={header} className="p-3">{header}</th>)}</tr></thead><tbody>{[...filteredRenewals].sort((a,b) => a.accountName.localeCompare(b.accountName)).map(renewal => <tr key={renewal.id} className="cursor-pointer border-t hover:bg-slate-50" onClick={() => setInspecting(renewal)}><td className="p-3 font-semibold">{renewal.accountName}</td><td className="p-3">{renewal.vendorName}</td><td className="p-3">{renewal.product}</td><td className="p-3">{renewal.salespersonName}</td><td className="p-3">{renewal.renewalDate}</td><td className="p-3">{renewal.currency} {renewal.suggestedRenewalValue.toLocaleString('en-IN')}</td><td className="p-3">{renewal.status}</td></tr>)}</tbody></table></div>}
+      {viewMode === 'kanban' &&
       <DndContext sensors={dndSensors} onDragEnd={handleDragEnd}>
         <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-4 overflow-x-auto pb-4">
           {RENEWAL_STATUSES.map((status) => {
@@ -307,6 +366,7 @@ export const RenewalBoard: React.FC = () => {
           })}
         </div>
       </DndContext>
+      }
 
       {/* Inspection Modal */}
       {inspecting && (() => {
@@ -489,18 +549,18 @@ export const RenewalBoard: React.FC = () => {
             {parsedRows && parsedRows.length > 0 && (
               <div className="border border-slate-200 rounded-xl overflow-hidden">
                 <div className="bg-slate-50 px-3 py-2 text-[11px] font-bold text-slate-600">
-                  {parsedRows.length} row(s) ready to import
+                  {historicalPreview ? `${historicalPreview.ready.length} orders matched; ${historicalPreview.skipped.length} skipped` : `${parsedRows.length} row(s) ready to import`}
                 </div>
                 <div className="max-h-48 overflow-y-auto">
                   <table className="w-full text-left text-[11px]">
                     <tbody className="divide-y divide-slate-100">
                       {parsedRows.slice(0, 8).map((row, idx) => (
                         <tr key={idx}>
-                          <td className="px-3 py-1.5 font-semibold text-slate-800">{row.accountName || row.account}</td>
-                          <td className="px-3 py-1.5 text-slate-500">{row.vendorName || row.vendor}</td>
-                          <td className="px-3 py-1.5 text-slate-500">{row.product}</td>
-                          <td className="px-3 py-1.5 text-slate-500">{row.salespersonName || row.salesperson}</td>
-                          <td className="px-3 py-1.5 text-slate-500">{row.previousValue || row.value}</td>
+                          <td className="px-3 py-1.5 font-semibold text-slate-800">{row.accountName || row.account || row['Client Name'] || row['Issue key']}</td>
+                          <td className="px-3 py-1.5 text-slate-500">{row.vendorName || row.vendor || row.OEM}</td>
+                          <td className="px-3 py-1.5 text-slate-500">{row.product || row['End User Name']}</td>
+                          <td className="px-3 py-1.5 text-slate-500">{row.salespersonName || row.salesperson || row.Created}</td>
+                          <td className="px-3 py-1.5 text-slate-500">{row.previousValue || row.value || row['Total Order Value']}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -512,6 +572,19 @@ export const RenewalBoard: React.FC = () => {
               </div>
             )}
 
+            {historicalPreview && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 space-y-1">
+              <p><strong>Historical Jira import:</strong> creates linked accounts, contacts, orders and renewals. {historicalPreview.inferredAccounts} rows have a client name inferred from one matching email. {historicalPreview.existingOrders} orders are already present.</p>
+              <p>Product and services amounts follow the value columns. {historicalPreview.inferredValueSplits} rows have a missing amount allocated using “Type of Order”; unreconciled rows are skipped for review.</p>
+              <p>{historicalPreview.existingAccounts} customer names match existing accounts; {historicalPreview.newAccounts} distinct names would create accounts. Matching ignores case and punctuation only.</p>
+              <p>Jira Created is used as the order date. Renewal is estimated 12 months later because the CSV has no expiry date. Billing, delivery and salesperson need verification.</p>
+              <label className="flex items-center gap-2"><input type="checkbox" checked={includeInferredAccounts} onChange={event => setIncludeInferredAccounts(event.target.checked)} /> Include {historicalPreview.inferredAccounts} inferred client matches (review source data first)</label>
+              {historicalPreview.skipped.length > 0 && <button className="underline font-semibold" onClick={() => {
+                const blob = new Blob([Papa.unparse(historicalPreview.skipped)], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a'); link.href = url; link.download = 'renewal-import-skipped.csv'; link.click(); URL.revokeObjectURL(url);
+              }}>Download skipped issue list</button>}
+            </div>}
+
             <div className="flex items-center justify-end space-x-3 pt-4 border-t border-slate-100">
               <button
                 onClick={() => setShowImportModal(false)}
@@ -521,11 +594,11 @@ export const RenewalBoard: React.FC = () => {
               </button>
               <button
                 onClick={handleConfirmImport}
-                disabled={!parsedRows || parsedRows.length === 0}
+                disabled={importing || !parsedRows || parsedRows.length === 0 || (historicalPreview !== null && !historicalPreview.ready.some(row => includeInferredAccounts || !row.accountInferred))}
                 className="px-5 py-2 text-xs font-semibold text-white bg-[#0073EA] hover:bg-blue-600 disabled:bg-slate-300 disabled:cursor-not-allowed rounded-xl transition-all shadow-xs flex items-center space-x-1.5"
               >
                 <Check className="w-3.5 h-3.5" />
-                <span>Import {parsedRows?.length || 0} Renewal{(parsedRows?.length || 0) === 1 ? '' : 's'}</span>
+                <span>{importing ? 'Importing…' : historicalPreview ? `Import ${historicalPreview.ready.filter(row => includeInferredAccounts || !row.accountInferred).length} Orders + Renewals` : `Import ${parsedRows?.length || 0} Renewals`}</span>
               </button>
             </div>
           </div>

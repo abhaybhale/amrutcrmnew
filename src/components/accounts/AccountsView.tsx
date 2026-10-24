@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useCRM } from '../../context/CRMContext';
-import { Account, AccountTier } from '../../types';
+import { Account, AccountTier, Contact } from '../../types';
 import { TierBadge, StatusBadge } from '../common/StatusBadge';
 import { BulkImportModal } from '../common/BulkImportModal';
 import {
@@ -22,8 +22,10 @@ import {
   Calendar,
   UploadCloud,
   FileSpreadsheet,
-  Sparkles
+  Sparkles,
+  GitMerge
 } from 'lucide-react';
+import { applyDuplicatePlan, previewManualAccountMerge } from '../../lib/deduplicateCustomers';
 
 export const AccountsView: React.FC = () => {
   const {
@@ -33,16 +35,26 @@ export const AccountsView: React.FC = () => {
     accessibleOrders,
     allUsers,
     createAccount,
-    updateAccount
+    updateAccount,
+    currentUser,
+    showToast
   } = useCRM();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTierFilter, setSelectedTierFilter] = useState('ALL');
+  const [viewMode, setViewMode] = useState<'cards' | 'table'>('table');
   const [inspectingAccount, setInspectingAccount] = useState<Account | null>(null);
   const [activeAccountTab, setActiveAccountTab] = useState<'overview' | 'contacts' | 'deals' | 'orders' | 'products'>('overview');
+  const contactBelongsTo = (contact: Contact, accountId: string) => contact.accountId === accountId || contact.accountIds?.includes(accountId);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [showMergeModal, setShowMergeModal] = useState(false);
+  const [mergeSearch, setMergeSearch] = useState('');
+  const [mergeSelection, setMergeSelection] = useState<Set<string>>(new Set());
+  const [mergeKeeperId, setMergeKeeperId] = useState('');
+  const [mergeBusy, setMergeBusy] = useState(false);
+  const canMerge = ['CRM Administrator', 'Managing Director', 'Sales Head', 'Sales Manager'].includes(currentUser.role);
   const [createData, setCreateData] = useState({
     name: '',
     industry: 'Banking & Financial Services',
@@ -64,7 +76,7 @@ export const AccountsView: React.FC = () => {
       (acc.industry || '').toLowerCase().includes(q);
     const matchesTier = selectedTierFilter === 'ALL' || acc.tier === selectedTierFilter;
     return matchesSearch && matchesTier;
-  });
+  }).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 
   const handleCreateAccount = (e: React.FormEvent) => {
     e.preventDefault();
@@ -82,13 +94,42 @@ export const AccountsView: React.FC = () => {
     setShowCreateModal(false);
   };
 
+  const toggleMergeAccount = (id: string) => setMergeSelection(previous => {
+    const next = new Set(previous);
+    if (next.has(id)) {
+      next.delete(id);
+      if (mergeKeeperId === id) setMergeKeeperId('');
+    } else {
+      next.add(id);
+      if (!mergeKeeperId) setMergeKeeperId(id);
+    }
+    return next;
+  });
+
+  const mergeAccounts = async () => {
+    const duplicates = [...mergeSelection].filter(id => id !== mergeKeeperId);
+    const keeper = accessibleAccounts.find(account => account.id === mergeKeeperId);
+    if (!keeper || !duplicates.length || !window.confirm(`Merge ${duplicates.length} account(s) into "${keeper.name}"? All linked CRM records will be moved to the primary account.`)) return;
+    setMergeBusy(true);
+    try {
+      const plan = await previewManualAccountMerge(mergeKeeperId, duplicates);
+      await applyDuplicatePlan(plan, () => undefined);
+      showToast(`${duplicates.length} account(s) merged into ${keeper.name}`, 'success');
+      setShowMergeModal(false);
+      setMergeSelection(new Set());
+      setMergeKeeperId('');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Account merge failed', 'error');
+    } finally { setMergeBusy(false); }
+  };
+
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6 select-none animate-in fade-in duration-200">
+    <div className="p-6 max-w-7xl mx-auto space-y-6 animate-in fade-in duration-200">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <div className="flex items-center space-x-2">
-            <h1 className="text-2xl font-black text-slate-900 tracking-tight">Accounts &amp; Clients 360</h1>
+            <h1 className="text-2xl font-black text-slate-900 tracking-tight">Accounts</h1>
             <span className="bg-indigo-100 text-indigo-800 text-xs font-bold px-2.5 py-0.5 rounded-full">
               {filteredAccounts.length} Enterprise Clients
             </span>
@@ -99,6 +140,7 @@ export const AccountsView: React.FC = () => {
         </div>
 
         <div className="flex items-center space-x-2">
+          {canMerge && <button onClick={() => setShowMergeModal(true)} className="px-3.5 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all cursor-pointer"><GitMerge className="w-4 h-4" /><span>Merge Similar</span></button>}
           <button
             onClick={() => setShowImportModal(true)}
             className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all cursor-pointer shadow-xs"
@@ -116,6 +158,8 @@ export const AccountsView: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {showMergeModal && <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4"><div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl"><div className="flex items-center justify-between"><div><h2 className="text-lg font-bold text-slate-900">Merge Similar Accounts</h2><p className="text-xs text-slate-500">Select matching customers and mark the account to retain as Primary.</p></div><button onClick={() => setShowMergeModal(false)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100"><X className="h-5 w-5" /></button></div><input value={mergeSearch} onChange={event => setMergeSearch(event.target.value)} placeholder="Search similar account names…" className="mt-4 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" /><div className="mt-3 max-h-[52vh] overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100">{accessibleAccounts.filter(account => !mergeSearch.trim() || account.name.toLowerCase().includes(mergeSearch.trim().toLowerCase())).map(account => <label key={account.id} className={`flex cursor-pointer items-center gap-3 p-3 hover:bg-slate-50 ${mergeSelection.has(account.id) ? 'bg-indigo-50' : ''}`}><input type="checkbox" checked={mergeSelection.has(account.id)} onChange={() => toggleMergeAccount(account.id)} /><input type="radio" name="primaryAccount" disabled={!mergeSelection.has(account.id)} checked={mergeKeeperId === account.id} onChange={() => setMergeKeeperId(account.id)} /><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-slate-900">{account.name}</p><p className="text-xs text-slate-500">{account.city || 'No city'} · {account.tier}</p></div>{mergeKeeperId === account.id && <span className="rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-bold text-emerald-700">PRIMARY</span>}</label>)}</div><div className="mt-4 flex items-center justify-between"><span className="text-xs text-slate-500">{mergeSelection.size} selected</span><div className="flex gap-2"><button onClick={() => setShowMergeModal(false)} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold">Cancel</button><button disabled={mergeBusy || mergeSelection.size < 2 || !mergeKeeperId} onClick={() => void mergeAccounts()} className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"><GitMerge className="h-4 w-4" />{mergeBusy ? 'Merging…' : 'Merge accounts'}</button></div></div></div></div>}
 
       {/* Toolbar */}
       <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-3 text-xs">
@@ -162,9 +206,11 @@ export const AccountsView: React.FC = () => {
       </div>
 
       {/* Grid of Accounts */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+      <div className="flex justify-end gap-1 text-xs"><button onClick={() => setViewMode('table')} className={`rounded-lg px-3 py-1.5 ${viewMode === 'table' ? 'bg-indigo-600 text-white' : 'bg-white text-slate-600'}`}>Table</button><button onClick={() => setViewMode('cards')} className={`rounded-lg px-3 py-1.5 ${viewMode === 'cards' ? 'bg-indigo-600 text-white' : 'bg-white text-slate-600'}`}>Cards</button></div>
+      {viewMode === 'table' && <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white"><table className="w-full text-left text-sm"><thead className="bg-slate-50 text-slate-600"><tr><th className="px-4 py-3">Account</th><th className="px-4 py-3">Industry</th><th className="px-4 py-3">City</th><th className="px-4 py-3">Tier</th><th className="px-4 py-3 text-right">Orders</th><th className="px-4 py-3 text-right">Contacts</th></tr></thead><tbody className="divide-y divide-slate-100">{filteredAccounts.map(acc => <tr key={acc.id} onClick={() => { setInspectingAccount(acc); setActiveAccountTab('overview'); }} className="cursor-pointer hover:bg-indigo-50"><td className="px-4 py-3 font-semibold text-indigo-700">{acc.name}</td><td className="px-4 py-3">{acc.industry}</td><td className="px-4 py-3">{acc.city}</td><td className="px-4 py-3">{acc.tier}</td><td className="px-4 py-3 text-right">{accessibleOrders.filter(order => order.accountId === acc.id).length}</td><td className="px-4 py-3 text-right">{contacts.filter(contact => contactBelongsTo(contact, acc.id)).length}</td></tr>)}</tbody></table></div>}
+      {viewMode === 'cards' && <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {filteredAccounts.map((acc) => {
-          const accContacts = contacts.filter(c => c.accountId === acc.id);
+          const accContacts = contacts.filter(c => contactBelongsTo(c, acc.id));
           const accOpps = accessibleOpportunities.filter(o => o.accountId === acc.id);
           const accOrders = accessibleOrders.filter(o => o.accountId === acc.id);
           const totalSpent = accOrders.reduce((sum, ord) => sum + (ord.grandTotal || ord.totalAmount || 0), 0);
@@ -225,7 +271,7 @@ export const AccountsView: React.FC = () => {
             </button>
           );
         })}
-      </div>
+      </div>}
 
       {/* 360-DEGREE ACCOUNT INSPECTION DRAWER */}
       {inspectingAccount && (
@@ -276,7 +322,7 @@ export const AccountsView: React.FC = () => {
                   activeAccountTab === 'contacts' ? 'border-indigo-600 text-indigo-600' : 'border-transparent hover:text-slate-800'
                 }`}
               >
-                Contacts ({contacts.filter(c => c.accountId === inspectingAccount.id).length})
+                Contacts ({contacts.filter(c => contactBelongsTo(c, inspectingAccount.id)).length})
               </button>
               <button
                 onClick={() => setActiveAccountTab('deals')}
@@ -336,7 +382,7 @@ export const AccountsView: React.FC = () => {
 
               {activeAccountTab === 'contacts' && (
                 <div className="space-y-3">
-                  {contacts.filter(c => c.accountId === inspectingAccount.id).map(cnt => (
+                  {contacts.filter(c => contactBelongsTo(c, inspectingAccount.id)).map(cnt => (
                     <div key={cnt.id} className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
                       <div className="flex items-center justify-between">
                         <div>

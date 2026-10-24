@@ -79,6 +79,9 @@ import {
 } from '../lib/firebaseAuth';
 import { requestGoogleAccessToken, disconnectGoogle, isGoogleOAuthConfigured, getConnectedGoogleEmail } from '../lib/googleAuth';
 import { syncGmailMessages, syncCalendarEvents } from '../lib/googleWorkspaceSync';
+import { db } from '../lib/firebase';
+import { doc, writeBatch } from 'firebase/firestore';
+import type { HistoricalOrderRow } from '../lib/historicalRenewalImport';
 
 export interface CustomerHistorySummary {
   matchedAccount?: Account;
@@ -204,6 +207,7 @@ interface CRMContextType {
   updateVendor: (id: string, vendorData: Partial<Vendor>) => void;
   createVendor: (vendorData: Partial<Vendor>) => Vendor | null;
   canManageVendors: boolean;
+  canEditVendor: (vendorId: string) => boolean;
 
   // Workflow Engine Methods
   updateWorkflow: (wfId: string, updatedWf: Partial<WorkflowDefinition>) => void;
@@ -315,6 +319,7 @@ interface CRMContextType {
   canManageRenewals: boolean;
   createRenewalRecord: (data: Partial<RenewalRecord>) => RenewalRecord | null;
   bulkImportRenewalRecords: (records: Partial<RenewalRecord>[]) => number;
+  importHistoricalOrders: (rows: HistoricalOrderRow[]) => Promise<{ orders: number; accounts: number; contacts: number }>;
   updateRenewalStatus: (id: string, status: RenewalStatus) => void;
   updateRenewalRecord: (id: string, data: Partial<RenewalRecord>) => void;
   reassignRenewal: (id: string, newSalespersonId: string) => void;
@@ -338,7 +343,7 @@ function healUsersList(list: User[]): User[] {
   if (!Array.isArray(list) || list.length === 0) return list;
   // Ensure usr_admin / CRM Administrator is Abhay (abhay@amrutsoftware.com)
   return list.map(u => {
-    if (u.id === 'usr_admin' || u.role === 'CRM Administrator') {
+    if (u.id === 'usr_admin') {
       if (u.id === 'usr_admin' && u.name === 'Abhay' && u.email === 'abhay@amrutsoftware.com') return u;
       return { ...u, id: 'usr_admin', name: 'Abhay', email: 'abhay@amrutsoftware.com' };
     }
@@ -471,7 +476,7 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // a signed-in user (the security rules require request.auth != null).
   // --------------------------------------------------------------------
   const [rawUsers, setUsers, usersLoading] = useSyncedCollection<User>('users', INITIAL_USERS, isAuthenticated);
-  const users = useMemo(() => healUsersList(rawUsers), [rawUsers]);
+  const users = useMemo(() => healUsersList(rawUsers).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) || a.email.localeCompare(b.email)), [rawUsers]);
 
   const [accounts, setAccounts, accountsLoading] = useSyncedCollection<Account>('accounts', INITIAL_ACCOUNTS, isAuthenticated);
   const [contacts, setContacts, contactsLoading] = useSyncedCollection<Contact>('contacts', INITIAL_CONTACTS, isAuthenticated);
@@ -480,8 +485,15 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [presalesRequests, setPresalesRequests] = useSyncedCollection<PresalesRequest>('presalesRequests', INITIAL_PRESALES, isAuthenticated);
   const [pocRecords, setPocRecords] = useSyncedCollection<POCRecord>('pocRecords', INITIAL_POCS, isAuthenticated);
   const [quotes, setQuotes] = useSyncedCollection<Quote>('quotes', INITIAL_QUOTES, isAuthenticated);
-  const [orders, setOrders] = useSyncedCollection<Order>('orders', INITIAL_ORDERS, isAuthenticated);
+  const [orders, setOrders, ordersLoading] = useSyncedCollection<Order>('orders', INITIAL_ORDERS, isAuthenticated);
   const [vendors, setVendors] = useSyncedCollection<Vendor>('vendors', INITIAL_VENDORS, isAuthenticated);
+  const linkedUsers = useMemo(() => users.map(user => {
+    const vendorResponsibilities = new Set(user.vendorResponsibilities || []);
+    vendors.forEach(vendor => {
+      if (vendor.vendorHeadUserId === user.id || vendor.secondaryVendorHeadIds?.includes(user.id)) vendorResponsibilities.add(vendor.id);
+    });
+    return { ...user, vendorResponsibilities: [...vendorResponsibilities] };
+  }), [users, vendors]);
 
   const [rawWorkflows, setWorkflows, workflowsLoading] = useSyncedCollection<WorkflowDefinition>('workflows', INITIAL_WORKFLOWS, isAuthenticated);
   const workflows = useMemo(() => healWorkflowsList(rawWorkflows), [rawWorkflows]);
@@ -498,6 +510,13 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Multi-Company & Multi-Tenant States
   const [companies, setCompanies] = useSyncedCollection<CompanyTenant>('companies', INITIAL_COMPANIES, isAuthenticated);
+  // Shared display lists feed the CRM's native selectors. Keep their ordering
+  // consistent without mutating the Firestore-backed collections.
+  const sortedAccounts = useMemo(() => [...accounts].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })), [accounts]);
+  const sortedContacts = useMemo(() => [...contacts].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })), [contacts]);
+  const sortedVendors = useMemo(() => [...vendors].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })), [vendors]);
+  const sortedRoles = useMemo(() => [...roles].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })), [roles]);
+  const sortedCompanies = useMemo(() => [...companies].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })), [companies]);
 
   // Which company's data the signed-in user is currently viewing — a
   // per-browser UI preference, not shared data, so this stays local.
@@ -524,7 +543,7 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Product Catalog (per-vendor price list) & Renewal Board
   const [products, setProducts] = useSyncedCollection<Product>('products', INITIAL_PRODUCTS, isAuthenticated);
-  const [renewalRecords, setRenewalRecords] = useSyncedCollection<RenewalRecord>('renewalRecords', INITIAL_RENEWAL_RECORDS, isAuthenticated);
+  const [renewalRecords, setRenewalRecords, renewalsLoading] = useSyncedCollection<RenewalRecord>('renewalRecords', INITIAL_RENEWAL_RECORDS, isAuthenticated);
 
   const [isGoogleSyncing, setIsGoogleSyncing] = useState(false);
   const [syncedEvents, setSyncedEvents] = useSyncedCollection<SyncedCalendarEvent>('syncedEvents', INITIAL_SYNCED_EVENTS, isAuthenticated);
@@ -537,7 +556,7 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const isDataLoading = isAuthenticated && (usersLoading || accountsLoading || contactsLoading || leadsLoading || opportunitiesLoading || workflowsLoading);
 
   const currentUser = useMemo<User>(() => {
-    const matched = users.find(u => u.email.toLowerCase() === firebaseUserEmail) || users.find(u => u.id === currentUserId);
+    const matched = linkedUsers.find(u => u.email.toLowerCase() === firebaseUserEmail) || linkedUsers.find(u => u.id === currentUserId);
     if (matched) return matched;
     return {
       id: currentUserId || 'unmapped_account',
@@ -557,7 +576,7 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       lastLogin: 'Never',
       accountStatus: 'Locked'
     };
-  }, [users, currentUserId, firebaseUserEmail]);
+  }, [linkedUsers, currentUserId, firebaseUserEmail]);
 
   useEffect(() => {
     if (isAuthenticated && currentUser?.id && currentUser.id !== currentUserId && firebaseUserEmail) {
@@ -674,9 +693,6 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         if (record.vendorId && currentUser.vendorResponsibilities.includes(record.vendorId)) {
           return true;
         }
-      } else {
-        // If no specific vendor restricted, can view vendor cases
-        return true;
       }
       // Also allow own created/reported
       if (
@@ -743,7 +759,7 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           return hasVendor || acc.ownerId === currentUser.id;
         });
       }
-      return accounts;
+      return accounts.filter(acc => acc.ownerId === currentUser.id);
     }
 
     // Role definition permission check
@@ -795,6 +811,7 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Real-time customer history search helper (used during Lead creation & Account view)
   const searchCustomerHistory = (companyName: string): CustomerHistorySummary => {
     const cleanQuery = companyName.trim().toLowerCase();
+    const normalizedQuery = cleanQuery.replace(/[^a-z0-9]/g, '');
     if (!cleanQuery || cleanQuery.length < 2) {
       return {
         matchedContacts: [],
@@ -808,12 +825,12 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       };
     }
 
-    const matchedAccount = accounts.find(a => 
+    const matchedAccount = accounts.find(a => a.name.toLowerCase().replace(/[^a-z0-9]/g, '') === normalizedQuery) || accounts.find(a =>
       a.name.toLowerCase().includes(cleanQuery) || cleanQuery.includes(a.name.toLowerCase())
     );
 
     const matchedContacts = contacts.filter(c => 
-      matchedAccount ? c.accountId === matchedAccount.id : c.accountName.toLowerCase().includes(cleanQuery)
+      matchedAccount ? (c.accountId === matchedAccount.id || c.accountIds?.includes(matchedAccount.id)) : c.accountName.toLowerCase().includes(cleanQuery)
     );
 
     const matchedLeads = leads.filter(l => 
@@ -1916,6 +1933,14 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       showToast(result.message || 'User provisioning failed', 'error');
       return result;
     }
+    if (result.userId && userData.role === 'Vendor Head' && userData.vendorResponsibilities?.length) {
+      setVendors(previous => previous.map(vendor => {
+        if (!userData.vendorResponsibilities?.includes(vendor.id)) return vendor;
+        if (!vendor.vendorHeadUserId) return { ...vendor, vendorHeadUserId: result.userId!, vendorHeadUserName: userData.name || '' };
+        if (vendor.vendorHeadUserId === result.userId) return vendor;
+        return { ...vendor, secondaryVendorHeadIds: [...new Set([...(vendor.secondaryVendorHeadIds || []), result.userId!])] };
+      }));
+    }
     addAuditLog({
       module: 'Users',
       recordId: result.userId || userData.email || 'new_user',
@@ -2019,6 +2044,28 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
 
     setUsers(prev => prev.map(u => u.id === id ? { ...u, ...userData, modifiedDate: new Date().toISOString() } : u));
+    if (userData.vendorResponsibilities || userData.role) {
+      const assigned = new Set(userData.vendorResponsibilities || linkedUsers.find(user => user.id === id)?.vendorResponsibilities || []);
+      const nextRole = userData.role || prevUser.role;
+      setVendors(previous => previous.map(vendor => {
+        const wasPrimary = vendor.vendorHeadUserId === id;
+        const secondary = new Set(vendor.secondaryVendorHeadIds || []);
+        const isAssigned = assigned.has(vendor.id);
+        if (!isAssigned || nextRole !== 'Vendor Head') secondary.delete(id);
+        if (wasPrimary && (!isAssigned || nextRole !== 'Vendor Head')) {
+          const replacement = linkedUsers.find(user => user.id !== id && user.role === 'Vendor Head' && secondary.has(user.id));
+          if (replacement) secondary.delete(replacement.id);
+          return { ...vendor, vendorHeadUserId: replacement?.id || '', vendorHeadUserName: replacement?.name || '', secondaryVendorHeadIds: [...secondary] };
+        }
+        if (isAssigned && nextRole === 'Vendor Head' && !vendor.vendorHeadUserId) {
+          secondary.delete(id);
+          return { ...vendor, vendorHeadUserId: id, vendorHeadUserName: userData.name || prevUser.name, secondaryVendorHeadIds: [...secondary] };
+        }
+        if (isAssigned && nextRole === 'Vendor Head' && vendor.vendorHeadUserId !== id) secondary.add(id);
+        const secondaryVendorHeadIds = [...secondary];
+        return JSON.stringify(secondaryVendorHeadIds) === JSON.stringify(vendor.secondaryVendorHeadIds || []) ? vendor : { ...vendor, secondaryVendorHeadIds };
+      }));
+    }
     
     addAuditLog({
       module: 'Users',
@@ -2728,13 +2775,39 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const canManageVendors = currentUser.role === 'CRM Administrator' || currentUser.role === 'Sales Head';
+  const canEditVendor = (vendorId: string) => canManageVendors || (currentUser.role === 'Vendor Head' && currentUser.vendorResponsibilities.includes(vendorId));
 
   const updateVendor = (id: string, vendorData: Partial<Vendor>) => {
-    if (!canManageVendors) {
-      showToast('Only CRM Administrators and Sales Heads can edit OEM partners.', 'error');
+    if (!canEditVendor(id)) {
+      showToast('You can edit only OEM partners assigned to you.', 'error');
       return;
     }
-    setVendors(prev => prev.map(v => v.id === id ? { ...v, ...vendorData } : v));
+    if (!canManageVendors && (vendorData.vendorHeadUserId !== undefined || vendorData.vendorHeadUserName !== undefined || vendorData.secondaryVendorHeadIds !== undefined)) {
+      showToast('Only administrators and Sales Heads can change OEM head assignments.', 'error');
+      return;
+    }
+    if (vendorData.vendorHeadUserId !== undefined) {
+      const oldHeadId = vendors.find(vendor => vendor.id === id)?.vendorHeadUserId;
+      const newHeadId = vendorData.vendorHeadUserId;
+      if (newHeadId && !users.some(user => user.id === newHeadId && user.isActive)) {
+        showToast('Choose an active staff member for Vendor Head.', 'error');
+        return;
+      }
+      if (oldHeadId !== newHeadId) {
+        setUsers(previous => previous.map(user => {
+          if (user.id !== oldHeadId && user.id !== newHeadId) return user;
+          const assigned = new Set(user.vendorResponsibilities || []);
+          if (user.id === oldHeadId) assigned.delete(id);
+          if (user.id === newHeadId) assigned.add(id);
+          return { ...user, vendorResponsibilities: [...assigned], modifiedDate: new Date().toISOString() };
+        }));
+      }
+    }
+    setVendors(prev => prev.map(v => v.id === id ? {
+      ...v,
+      ...vendorData,
+      quarterlyTarget: (vendorData.annualRevenueTarget ?? v.annualRevenueTarget ?? 0) / 4
+    } : v));
     showToast(`Vendor details updated`, 'info');
   };
 
@@ -2757,16 +2830,24 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       distributorName: vendorData.distributorName ?? '',
       partnerPortalUrl: vendorData.partnerPortalUrl ?? '',
       annualRevenueTarget: vendorData.annualRevenueTarget ?? 0,
-      quarterlyTarget: vendorData.quarterlyTarget ?? 0,
+      quarterlyTarget: (vendorData.annualRevenueTarget ?? 0) / 4,
+      servicesTarget: vendorData.servicesTarget ?? 0,
       focusProducts: vendorData.focusProducts ?? [],
       certifiedEngineersCount: vendorData.certifiedEngineersCount ?? 0,
       activeRegisteredDealsCount: 0,
       mdfAllocated: vendorData.mdfAllocated ?? 0,
-      mdfUtilized: 0,
+      mdfUtilized: vendorData.mdfUtilized ?? 0,
       vendorHealth: 'Healthy / High Growth'
     };
 
     setVendors(prev => [...prev, newVendor]);
+    if (newVendor.vendorHeadUserId) {
+      setUsers(previous => previous.map(user => user.id === newVendor.vendorHeadUserId ? {
+        ...user,
+        vendorResponsibilities: [...new Set([...(user.vendorResponsibilities || []), newVendor.id])],
+        modifiedDate: new Date().toISOString()
+      } : user));
+    }
     showToast(`Vendor ${newVendor.name} added`, 'success');
     return newVendor;
   };
@@ -3410,7 +3491,8 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // Find Vendor Head User
     const activeUsers = users.filter(u => u.isActive);
     const activeUserIds = new Set(activeUsers.map(u => u.id));
-    const vendorHeadUser = activeUsers.find(u => (u.vendorResponsibilities || []).includes(vendorId)) ||
+    const vendorHeadUser = activeUsers.find(u => u.id === vendor?.vendorHeadUserId) ||
+      activeUsers.find(u => (u.vendorResponsibilities || []).includes(vendorId)) ||
       activeUsers.find(u => u.role === 'Sales Head' || u.role === 'Vendor Head' || u.role === 'Managing Director');
 
     // All targets for this vendor in this company
@@ -3903,6 +3985,104 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return imported.length;
   };
 
+  const importHistoricalOrders = async (rows: HistoricalOrderRow[]): Promise<{ orders: number; accounts: number; contacts: number }> => {
+    if (!canManageRenewals || !isAuthenticated || usersLoading || accountsLoading || contactsLoading || ordersLoading || renewalsLoading) {
+      throw new Error('Wait for CRM data to load, then sign in as a renewal manager to import.');
+    }
+    const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const stableId = (value: string) => {
+      let hash = 2166136261;
+      for (const char of value) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+      return (hash >>> 0).toString(36);
+    };
+    const accountsByName = new Map(accounts.map(account => [normalize(account.name), account]));
+    const contactsByKey = new Map(contacts.map(contact => [contact.accountId + ':' + (contact.email ? contact.email.toLowerCase() : normalize(contact.name)), contact]));
+    const existingOrderIds = new Set(orders.map(order => order.id));
+    const vendorByName = new Map(vendors.map(vendor => [normalize(vendor.name), vendor]));
+    const existingRenewalIds = new Set(renewalRecords.map(renewal => renewal.id));
+    const pending: { collection: string; id: string; value: object }[] = [];
+    const now = new Date().toISOString();
+    let importedOrders = 0;
+    let createdAccounts = 0;
+    let createdContacts = 0;
+
+    for (const row of rows) {
+      const issueId = row.issueKey.toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+      const orderId = `ord_jira_${issueId}`;
+      if (existingOrderIds.has(orderId)) continue;
+      const accountKey = normalize(row.accountName);
+      let account = accountsByName.get(accountKey);
+      if (!account) {
+        account = {
+          id: `acc_jira_${stableId(accountKey)}`, name: row.accountName,
+          industry: 'Unspecified', tier: 'General', website: '', phone: '', city: '', country: '',
+          ownerId: currentUser.id, installedProducts: [], vendorsEngaged: [], totalHistoricalRevenue: 0,
+          relationshipHealth: 'Good', lastActivityDate: now, createdDate: now
+        };
+        accountsByName.set(accountKey, account);
+        pending.push({ collection: 'accounts', id: account.id, value: account });
+        createdAccounts++;
+      }
+      let contact: Contact | undefined;
+      if (row.contactName || row.contactEmail) {
+        const contactKey = account.id + ':' + (row.contactEmail || normalize(row.contactName));
+        contact = contactsByKey.get(contactKey);
+        if (!contact) {
+          contact = {
+            id: `cnt_jira_${stableId(contactKey)}`, accountId: account.id, accountName: account.name,
+            name: row.contactName || row.contactEmail, email: row.contactEmail, phone: '', mobile: '',
+            designation: '', department: '', roleInBuying: 'User / End-User', isPrimary: false,
+            city: account.city, notes: `Imported from ${row.issueKey}`, createdDate: now
+          };
+          contactsByKey.set(contactKey, contact);
+          pending.push({ collection: 'contacts', id: contact.id, value: contact });
+          createdContacts++;
+        }
+      }
+      const vendor = vendorByName.get(normalize(row.vendorName));
+      const order: Order = {
+        id: orderId, orderNumber: row.issueKey, customerPoNumber: '', poDate: row.orderDate,
+        orderReceivedDate: row.orderDate, accountId: account.id, accountName: account.name,
+        contactId: contact?.id || '', contactName: contact?.name || '', opportunityId: '', opportunityTitle: '',
+        salespersonId: currentUser.id, salespersonName: currentUser.name,
+        vendorId: vendor?.id || '', vendorName: row.vendorName, product: 'Historical order (product unspecified)',
+        currency: currentCompany.currency, softwareAmount: row.softwareAmount, servicesAmount: row.servicesAmount,
+        totalAmount: row.totalAmount, termMonths: 12, startDate: row.orderDate, endDate: row.renewalDate,
+        billingStatus: 'Pending Invoice', deliveryStatus: 'Pending OEM Dispatch',
+        status: 'PO Received – Verification', renewalDate: row.renewalDate, renewalRecordCreated: true,
+        notes: `Imported from Jira ${row.issueKey}; original status: ${row.sourceStatus}. ${row.allocationNote ? row.allocationNote + '. ' : ''}Created date used as order date; 12-month renewal date is an estimate. Billing and delivery need verification.`,
+        createdDate: now, customFields: { sourceIssueKey: row.issueKey, historicalImport: true, sourceCreatedDate: row.orderDate, sourceOrderType: row.orderType, valueAllocationNote: row.allocationNote }
+      };
+      pending.push({ collection: 'orders', id: order.id, value: order });
+      importedOrders++;
+      const renewalId = `ren_jira_${issueId}`;
+      if (!existingRenewalIds.has(renewalId)) {
+        const renewal: RenewalRecord = {
+          id: renewalId, companyId: currentCompanyId, accountId: account.id, accountName: account.name,
+          vendorId: vendor?.id || '', vendorName: row.vendorName, product: order.product,
+          salespersonId: currentUser.id, salespersonName: currentUser.name,
+          renewalDate: row.renewalDate, previousValue: row.totalAmount,
+          suggestedRenewalValue: Math.round(row.totalAmount * (1 + (currentCompany.renewalPriceIncreasePercent || 0) / 100)),
+          currency: currentCompany.currency, status: 'Upcoming', linkedOrderId: order.id,
+          notes: `Estimated 12 months after Jira issue creation (${row.orderDate}); confirm actual contract expiry.`,
+          importedById: currentUser.id, importedByName: currentUser.name, createdDate: now
+        };
+        pending.push({ collection: 'renewalRecords', id: renewal.id, value: renewal });
+      }
+      existingOrderIds.add(orderId);
+      existingRenewalIds.add(renewalId);
+    }
+    // A repeat import uses stable Jira IDs, so retrying after a partial upload
+    // overwrites the same documents instead of creating duplicates.
+    for (let start = 0; start < pending.length; start += 400) {
+      const batch = writeBatch(db);
+      pending.slice(start, start + 400).forEach(item => batch.set(doc(db, item.collection, item.id), item.value));
+      await batch.commit();
+    }
+    showToast(`${importedOrders} historical orders and linked renewals imported`, 'success');
+    return { orders: importedOrders, accounts: createdAccounts, contacts: createdContacts };
+  };
+
   const updateRenewalStatus = (id: string, status: RenewalStatus) => {
     const target = renewalRecords.find(r => r.id === id);
     if (!target || (!canManageRenewals && target.salespersonId !== currentUser.id)) {
@@ -3978,18 +4158,18 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     <CRMContext.Provider
       value={{
         currentUser,
-        allUsers: users,
-        roles,
+        allUsers: linkedUsers,
+        roles: sortedRoles,
         fieldAttributes,
-        accounts,
-        contacts,
+        accounts: sortedAccounts,
+        contacts: sortedContacts,
         leads,
         opportunities,
         presalesRequests,
         pocRecords,
         quotes,
         orders,
-        vendors,
+        vendors: sortedVendors,
         workflows,
         auditLogs,
         assignmentHistory,
@@ -4043,6 +4223,7 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         updateVendor,
         createVendor,
         canManageVendors,
+        canEditVendor,
         updateWorkflow,
         createWorkflow,
         deleteWorkflow,
@@ -4069,7 +4250,7 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         generateActivationLink,
         logout,
         // Multi-Company
-        companies,
+        companies: sortedCompanies,
         currentCompanyId,
         currentCompany,
         userMemberships,
@@ -4119,6 +4300,7 @@ export const CRMProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         canManageRenewals,
         createRenewalRecord,
         bulkImportRenewalRecords,
+        importHistoricalOrders,
         updateRenewalStatus,
         updateRenewalRecord,
         reassignRenewal,

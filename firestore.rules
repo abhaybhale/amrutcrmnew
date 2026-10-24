@@ -209,7 +209,20 @@ service cloud.firestore {
     match /orders/{id} { allow read, write: if canUseCrm(); }
     match /vendors/{id} {
       allow read: if canUseCrm();
-      allow create, update, delete: if canManageVendors();
+      allow create, delete: if canManageVendors();
+      allow update: if canManageVendors() || (isActiveStaff()
+        && myProfile().role == 'Vendor Head'
+        && (resource.data.vendorHeadUserId == crmUserId()
+          || id in myProfile().get('vendorResponsibilities', [])
+          || crmUserId() in resource.data.get('secondaryVendorHeadIds', []))
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name', 'code', 'relationshipManager', 'partnerLevel', 'territory',
+          'agreementStartDate', 'agreementRenewalDate', 'distributorName',
+          'partnerPortalUrl', 'annualRevenueTarget', 'quarterlyTarget',
+          'servicesTarget', 'focusProducts', 'certifiedEngineersCount',
+          'activeRegisteredDealsCount', 'mdfAllocated', 'mdfUtilized',
+          'vendorHealth', 'logo'
+        ]));
     }
     match /assignmentHistory/{id} { allow read, write: if canUseCrm(); }
     match /userMemberships/{id} {

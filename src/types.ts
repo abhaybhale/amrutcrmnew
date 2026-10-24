@@ -182,6 +182,8 @@ export interface Contact {
   id: string;
   accountId: string;
   accountName: string;
+  accountIds?: string[];
+  accountNames?: string[];
   name: string;
   email: string;
   phone: string;
@@ -603,6 +605,7 @@ export interface Vendor {
   partnerPortalUrl: string;
   annualRevenueTarget: number;
   quarterlyTarget: number;
+  servicesTarget?: number;
   focusProducts: string[];
   certifiedEngineersCount: number;
   activeRegisteredDealsCount: number;

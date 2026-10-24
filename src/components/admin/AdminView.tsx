@@ -6,6 +6,7 @@ import { FieldAttributesTab } from './FieldAttributesTab';
 import { DataImportStudioTab } from './DataImportStudioTab';
 import { CompaniesAdminTab } from './CompaniesAdminTab';
 import { ProductCatalogTab } from './ProductCatalogTab';
+import { DataManagementTab } from './DataManagementTab';
 import {
   Users,
   ShieldCheck,
@@ -19,7 +20,7 @@ import {
   Package
 } from 'lucide-react';
 
-type AdminTabId = 'users' | 'roles' | 'fields' | 'import' | 'companies' | 'products';
+type AdminTabId = 'users' | 'roles' | 'fields' | 'import' | 'companies' | 'products' | 'data';
 
 interface AdminViewProps {
   initialTab?: AdminTabId;
@@ -83,12 +84,18 @@ export const AdminView: React.FC<AdminViewProps> = ({
           icon: Package,
           badge: `${products.length} SKUs`,
           description: 'Manage per-vendor product list prices used across Leads, Opportunities & Quotes'
+        }, {
+          id: 'data' as const,
+          label: 'Demo Records & Danger Zone',
+          icon: Database,
+          badge: 'Admin only',
+          description: 'Review record counts and delete demo or selected module data'
         }]
       : [])
   ];
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6 select-none animate-in fade-in duration-200">
+    <div className="p-6 max-w-7xl mx-auto space-y-6 animate-in fade-in duration-200">
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -156,6 +163,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
         )}
         {activeAdminTab === 'companies' && (isAdminOrMD || isSalesHead) && <CompaniesAdminTab />}
         {activeAdminTab === 'products' && isAdminOrMD && <ProductCatalogTab />}
+        {activeAdminTab === 'data' && isAdminOrMD && <DataManagementTab />}
       </div>
     </div>
   );

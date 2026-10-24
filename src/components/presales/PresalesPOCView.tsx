@@ -29,6 +29,7 @@ export const PresalesPOCView: React.FC = () => {
   } = useCRM();
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [viewMode, setViewMode] = useState<'table' | 'kanban' | 'cards'>('table');
   const [selectedTypeFilter, setSelectedTypeFilter] = useState('ALL');
   const [selectedStatusFilter, setSelectedStatusFilter] = useState('ALL');
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -90,7 +91,7 @@ export const PresalesPOCView: React.FC = () => {
   };
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6 select-none animate-in fade-in duration-200">
+    <div className="p-6 max-w-7xl mx-auto space-y-6 animate-in fade-in duration-200">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -175,6 +176,10 @@ export const PresalesPOCView: React.FC = () => {
       </div>
 
       {/* Grid of Engagements */}
+      <div className="flex justify-end gap-2 text-sm">{(['table','kanban','cards'] as const).map(mode => <button key={mode} onClick={() => setViewMode(mode)} className={`rounded-lg px-4 py-2 capitalize ${viewMode === mode ? 'bg-slate-900 text-white' : 'bg-white'}`}>{mode}</button>)}</div>
+      {viewMode === 'table' && <div className="overflow-x-auto rounded-xl border bg-white"><table className="w-full text-left text-xs"><thead className="bg-slate-50"><tr>{['Opportunity','Account','Type','Consultant','Target','Status'].map(header => <th key={header} className="p-3">{header}</th>)}</tr></thead><tbody>{filteredRequests.map(req => <tr key={req.id} onClick={() => setInspectingRequest(req)} className="cursor-pointer border-t hover:bg-slate-50"><td className="p-3 font-semibold">{req.opportunityTitle}</td><td className="p-3">{req.accountName}</td><td className="p-3">{req.requestType || req.type}</td><td className="p-3">{req.assignedConsultantName || 'Unassigned'}</td><td className="p-3">{req.targetSignOffDate || req.targetCompletionDate}</td><td className="p-3">{req.status}</td></tr>)}</tbody></table></div>}
+      {viewMode === 'kanban' && <div className="grid gap-3 overflow-x-auto md:grid-cols-3 xl:grid-cols-7">{(['Requested','Assigned','In Progress','Completed – Sign-off Received','Completed – Issues Identified','On Hold','Cancelled'] as PresalesStatus[]).map(status => <section key={status} className="min-w-[170px] rounded-xl bg-slate-100 p-3"><h3 className="mb-3 text-xs font-bold">{status} ({filteredRequests.filter(req => req.status === status).length})</h3><div className="space-y-2">{filteredRequests.filter(req => req.status === status).map(req => <button key={req.id} onClick={() => setInspectingRequest(req)} className="w-full rounded-lg border bg-white p-3 text-left text-xs shadow-sm"><strong>{req.opportunityTitle}</strong><span className="mt-1 block text-slate-500">{req.accountName}</span></button>)}</div></section>)}</div>}
+      {viewMode === 'cards' &&
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {filteredRequests.map((req) => (
           <div
@@ -217,6 +222,7 @@ export const PresalesPOCView: React.FC = () => {
           </div>
         ))}
       </div>
+      }
 
       {/* CREATE MODAL */}
       {showCreateModal && (

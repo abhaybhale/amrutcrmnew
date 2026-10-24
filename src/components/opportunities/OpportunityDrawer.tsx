@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Opportunity, OpportunityStage } from '../../types';
 import { useCRM } from '../../context/CRMContext';
 import { StatusBadge, PriorityBadge } from '../common/StatusBadge';
@@ -39,6 +39,9 @@ export const OpportunityDrawer: React.FC<OpportunityDrawerProps> = ({
 }) => {
   const {
     currentUser,
+    vendors,
+    accounts,
+    allUsers,
     updateOpportunity,
     accessibleQuotes,
     accessiblePresales,
@@ -53,6 +56,13 @@ export const OpportunityDrawer: React.FC<OpportunityDrawerProps> = ({
 
   const [activeTab, setActiveTab] = useState<'overview' | 'commercials' | 'presales' | 'quotes' | 'activity'>('overview');
   const [newNote, setNewNote] = useState('');
+  const [editingRecord, setEditingRecord] = useState(false);
+  const [draft, setDraft] = useState<Partial<Opportunity>>({});
+
+  useEffect(() => {
+    setEditingRecord(false);
+    setDraft(opportunity ? { ...opportunity } : {});
+  }, [opportunity?.id]);
 
   if (!opportunity) return null;
 
@@ -122,6 +132,7 @@ export const OpportunityDrawer: React.FC<OpportunityDrawerProps> = ({
           </div>
 
           <div className="mt-3">
+            <button type="button" onClick={() => { setDraft({ ...opportunity }); setEditingRecord(true); }} className="float-right rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white">Edit opportunity</button>
             <h2 className="text-xl font-bold text-slate-900 leading-tight">
               {opportunity.title}
             </h2>
@@ -160,6 +171,22 @@ export const OpportunityDrawer: React.FC<OpportunityDrawerProps> = ({
             </div>
           </div>
         </div>
+
+        {editingRecord && <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 p-4">
+          <form onSubmit={event => { event.preventDefault(); if (!draft.title?.trim()) return; const softwareValue = Number(draft.softwareValue || 0), servicesValue = Number(draft.servicesValue || 0), probability = Number(draft.probability || 0); updateOpportunity(opportunity.id, { ...draft, softwareValue, servicesValue, probability, totalValue: softwareValue + servicesValue, weightedValue: (softwareValue + servicesValue) * probability / 100 }); setEditingRecord(false); }} className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
+            <h3 className="mb-4 text-lg font-bold">Edit opportunity</h3>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {([['title','Opportunity title'],['description','Description'],['product','Product'],['nextAction','Next action'],['nextActionDate','Next action date'],['expectedCloseDate','Expected close date'],['softwareValue','Product / software value (₹)'],['servicesValue','Services value (₹)'],['probability','Win probability (%)'],['dealRegistrationStatus','Deal registration status'],['dealRegistrationNumber','Deal registration number']] as const).map(([key,label]) => <label key={key} className="text-xs font-semibold text-slate-700">{label}<input type={['softwareValue','servicesValue','probability'].includes(key) ? 'number' : key.endsWith('Date') ? 'date' : 'text'} min={['softwareValue','servicesValue','probability'].includes(key) ? 0 : undefined} max={key === 'probability' ? 100 : undefined} value={draft[key] ?? ''} onChange={event => setDraft(previous => ({ ...previous, [key]: ['softwareValue','servicesValue','probability'].includes(key) ? Number(event.target.value) : event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 p-2 font-normal" /></label>)}
+              <label className="text-xs font-semibold">Account<select value={draft.accountId || ''} onChange={event => { const account = accounts.find(item => item.id === event.target.value); setDraft(previous => ({ ...previous, accountId: event.target.value, accountName: account?.name || '' })); }} className="mt-1 w-full rounded-lg border p-2"><option value="">Unassigned</option>{accounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label>
+              <label className="text-xs font-semibold">OEM / vendor<select value={draft.vendorId || ''} onChange={event => { const vendor = vendors.find(item => item.id === event.target.value); setDraft(previous => ({ ...previous, vendorId: event.target.value, vendorName: vendor?.name || '' })); }} className="mt-1 w-full rounded-lg border p-2"><option value="">Unassigned</option>{vendors.map(vendor => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}</select></label>
+              <label className="text-xs font-semibold">Owner<select value={draft.ownerId || ''} onChange={event => { const user = allUsers.find(item => item.id === event.target.value); setDraft(previous => ({ ...previous, ownerId: event.target.value, ownerName: user?.name || '' })); }} className="mt-1 w-full rounded-lg border p-2"><option value="">Unassigned</option>{allUsers.map(user => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
+              <label className="text-xs font-semibold">Pipeline<select value={draft.pipeline || 'Software – Direct / Simple'} onChange={event => setDraft(previous => ({ ...previous, pipeline: event.target.value as Opportunity['pipeline'] }))} className="mt-1 w-full rounded-lg border p-2">{['Software – Direct / Simple','Software + Presales / POC','Services / Customisation','Renewal / Expansion','Tender / Formal RFP'].map(value => <option key={value}>{value}</option>)}</select></label>
+              <label className="text-xs font-semibold">Forecast category<select value={draft.forecastCategory || 'Pipeline'} onChange={event => setDraft(previous => ({ ...previous, forecastCategory: event.target.value as Opportunity['forecastCategory'] }))} className="mt-1 w-full rounded-lg border p-2">{['Pipeline','Best Case','Commit','Closed','Omitted'].map(value => <option key={value}>{value}</option>)}</select></label>
+              <label className="text-xs font-semibold sm:col-span-2">Notes<textarea value={draft.notes || ''} onChange={event => setDraft(previous => ({ ...previous, notes: event.target.value }))} className="mt-1 min-h-24 w-full rounded-lg border p-2" /></label>
+            </div>
+            <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setEditingRecord(false)} className="rounded-lg border px-4 py-2">Cancel</button><button type="submit" className="rounded-lg bg-indigo-600 px-4 py-2 font-semibold text-white">Save changes</button></div>
+          </form>
+        </div>}
 
         {/* Stage Status & Closure CTAs Bar */}
         <div className="px-6 py-3 bg-indigo-50/80 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-2">

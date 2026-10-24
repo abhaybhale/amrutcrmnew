@@ -150,7 +150,7 @@ export const AuditTrailView: React.FC = () => {
   const reassignmentsCount = auditLogs.filter(l => l.action === 'ASSIGN').length;
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6 select-none animate-in fade-in duration-200">
+    <div className="p-6 max-w-7xl mx-auto space-y-6 animate-in fade-in duration-200">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>

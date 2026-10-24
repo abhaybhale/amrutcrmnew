@@ -9,6 +9,7 @@ const PRIORITIES: TaskPriority[] = ['Urgent', 'High', 'Medium', 'Low'];
 export const TasksView: React.FC = () => {
   const { currentUser, allUsers, accessibleTasks, createTask, updateTask, completeTask, deleteTask } = useCRM();
   const [filter, setFilter] = useState<'mine' | 'all' | 'overdue' | 'completed'>('mine');
+  const [viewMode, setViewMode] = useState<'table' | 'kanban' | 'cards'>('table');
   const [showNew, setShowNew] = useState(false);
 
   const filtered = accessibleTasks.filter(t => {
@@ -39,6 +40,10 @@ export const TasksView: React.FC = () => {
         ))}
       </div>
 
+      <div className="flex justify-end gap-2 text-sm">{(['table','kanban','cards'] as const).map(mode => <button key={mode} onClick={() => setViewMode(mode)} className={`rounded-lg px-4 py-2 capitalize ${viewMode === mode ? 'bg-slate-900 text-white' : 'bg-white'}`}>{mode}</button>)}</div>
+      {viewMode === 'table' && <div className="overflow-x-auto rounded-xl border bg-white"><table className="w-full text-left text-xs"><thead className="bg-slate-50"><tr>{['Task','Type','Assignee','Due','Priority','Status','Actions'].map(header => <th key={header} className="p-3">{header}</th>)}</tr></thead><tbody>{filtered.map(task => <tr key={task.id} className="border-t"><td className="p-3 font-semibold">{task.title}</td><td className="p-3">{task.type}</td><td className="p-3">{task.assignedToName}</td><td className="p-3">{task.dueDate}</td><td className="p-3">{task.priority}</td><td className="p-3">{task.status}</td><td className="p-3"><button disabled={task.status === 'Completed'} onClick={() => completeTask(task.id)} className="mr-3 text-emerald-700 disabled:opacity-40">Complete</button><button onClick={() => deleteTask(task.id)} className="text-rose-700">Delete</button></td></tr>)}</tbody></table></div>}
+      {viewMode === 'kanban' && <div className="grid gap-3 md:grid-cols-4">{PRIORITIES.map(priority => <section key={priority} className="rounded-xl bg-slate-100 p-3"><h3 className="mb-3 text-xs font-bold">{priority} ({filtered.filter(task => task.priority === priority).length})</h3><div className="space-y-2">{filtered.filter(task => task.priority === priority).map(task => <TaskRow key={task.id} task={task} onComplete={() => completeTask(task.id)} onDelete={() => deleteTask(task.id)} />)}</div></section>)}</div>}
+      {viewMode === 'cards' &&
       <div className="space-y-2.5">
         {filtered.map(t => (
           <TaskRow key={t.id} task={t} onComplete={() => completeTask(t.id)} onDelete={() => deleteTask(t.id)} />
@@ -50,6 +55,7 @@ export const TasksView: React.FC = () => {
           </div>
         )}
       </div>
+      }
 
       {showNew && (
         <NewTaskModal

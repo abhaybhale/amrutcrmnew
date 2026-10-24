@@ -55,7 +55,7 @@ export const CustomerHistoryPeek: React.FC<CustomerHistoryPeekProps> = ({
     health
   } = history;
 
-  const hasAnyMatch = matchedAccount || matchedContacts.length > 0 || matchedLeads.length > 0 || openOpportunities.length > 0;
+  const hasAnyMatch = matchedAccount || matchedContacts.length > 0 || matchedLeads.length > 0 || openOpportunities.length > 0 || closedOpportunities.length > 0 || pastOrders.length > 0;
 
   if (!hasAnyMatch) {
     return (

@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Lead, Opportunity } from '../../types';
 import { useCRM } from '../../context/CRMContext';
+import { CustomerHistoryPeek } from '../common/CustomerHistoryPeek';
 import { StatusBadge, PriorityBadge, SLACountdownBadge } from '../common/StatusBadge';
 import {
   X,
@@ -38,6 +39,8 @@ export const LeadDrawer: React.FC<LeadDrawerProps> = ({
 }) => {
   const {
     currentUser,
+    vendors,
+    allUsers,
     updateLead,
     workflows,
     assignmentHistory,
@@ -52,6 +55,13 @@ export const LeadDrawer: React.FC<LeadDrawerProps> = ({
   const [activeTab, setActiveTab] = useState<'details' | 'bant' | 'history' | 'activity'>('details');
   const [newNote, setNewNote] = useState('');
   const [isEditingNotes, setIsEditingNotes] = useState(false);
+  const [editingRecord, setEditingRecord] = useState(false);
+  const [draft, setDraft] = useState<Partial<Lead>>({});
+
+  useEffect(() => {
+    setEditingRecord(false);
+    setDraft(lead ? { ...lead } : {});
+  }, [lead?.id]);
 
   if (!lead) return null;
 
@@ -111,6 +121,7 @@ export const LeadDrawer: React.FC<LeadDrawerProps> = ({
           </div>
 
           <div className="mt-3">
+            <button type="button" onClick={() => { setDraft({ ...lead }); setEditingRecord(true); }} className="float-right rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white">Edit lead</button>
             <h2 className="text-xl font-bold text-slate-900 leading-tight">
               {lead.companyName}
             </h2>
@@ -148,6 +159,22 @@ export const LeadDrawer: React.FC<LeadDrawerProps> = ({
             </div>
           </div>
         </div>
+
+        {editingRecord && <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 p-4">
+          <form onSubmit={event => { event.preventDefault(); if (!draft.companyName?.trim() || !draft.contactName?.trim()) return; updateLead(lead.id, draft); setEditingRecord(false); }} className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
+            <h3 className="mb-4 text-lg font-bold">Edit lead</h3>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {([['companyName','Customer / company'],['contactName','Contact name'],['contactEmail','Email'],['contactPhone','Phone'],['designation','Designation'],['city','City'],['country','Country'],['product','Product'],['productFamily','Product family'],['requirement','Requirement'],['territory','Territory'],['nextAction','Next action'],['nextActionDate','Next action date'],['expectedValue','Expected value (₹)']] as const).map(([key,label]) => <label key={key} className="text-xs font-semibold text-slate-700">{label}<input type={key === 'expectedValue' ? 'number' : key === 'nextActionDate' ? 'date' : 'text'} min={key === 'expectedValue' ? 0 : undefined} value={draft[key] ?? ''} onChange={event => setDraft(previous => ({ ...previous, [key]: key === 'expectedValue' ? Number(event.target.value) : event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 p-2 font-normal" /></label>)}
+              <label className="text-xs font-semibold">OEM / vendor<select value={draft.vendorId || ''} onChange={event => { const vendor = vendors.find(item => item.id === event.target.value); setDraft(previous => ({ ...previous, vendorId: event.target.value, vendorName: vendor?.name || '' })); }} className="mt-1 w-full rounded-lg border p-2"><option value="">Unassigned</option>{vendors.map(vendor => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}</select></label>
+              <label className="text-xs font-semibold">Working salesperson<select value={draft.workingSalespersonId || ''} onChange={event => { const user = allUsers.find(item => item.id === event.target.value); setDraft(previous => ({ ...previous, workingSalespersonId: event.target.value, workingSalespersonName: user?.name || '' })); }} className="mt-1 w-full rounded-lg border p-2"><option value="">Unassigned</option>{allUsers.map(user => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
+              <label className="text-xs font-semibold">Priority<select value={draft.priority || 'Medium'} onChange={event => setDraft(previous => ({ ...previous, priority: event.target.value as Lead['priority'] }))} className="mt-1 w-full rounded-lg border p-2">{['Low','Medium','High','Urgent'].map(value => <option key={value}>{value}</option>)}</select></label>
+              <label className="text-xs font-semibold">Source<select value={draft.source || 'Website Inbound'} onChange={event => setDraft(previous => ({ ...previous, source: event.target.value as Lead['source'] }))} className="mt-1 w-full rounded-lg border p-2">{['Website Inbound','OEM / Vendor Referral','Google Campaign','LinkedIn Outreach','Seminar / Webinar','Exhibition / Expo','Closed-Door Event','Existing Customer Expansion','Cold Calling','Partner / Reseller Referral','Email Campaign','WhatsApp / Chat'].map(value => <option key={value}>{value}</option>)}</select></label>
+              <label className="text-xs font-semibold">Interest type<select value={draft.interestType || 'Software License'} onChange={event => setDraft(previous => ({ ...previous, interestType: event.target.value as Lead['interestType'] }))} className="mt-1 w-full rounded-lg border p-2">{['Software License','Cloud Subscription','Services & Implementation','Annual Support / Maintenance','Custom Development'].map(value => <option key={value}>{value}</option>)}</select></label>
+              <label className="text-xs font-semibold sm:col-span-2">Notes<textarea value={draft.notes || ''} onChange={event => setDraft(previous => ({ ...previous, notes: event.target.value }))} className="mt-1 min-h-24 w-full rounded-lg border p-2" /></label>
+            </div>
+            <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setEditingRecord(false)} className="rounded-lg border px-4 py-2">Cancel</button><button type="submit" className="rounded-lg bg-indigo-600 px-4 py-2 font-semibold text-white">Save changes</button></div>
+          </form>
+        </div>}
 
         {/* Action Bar (Workflow transitions & Convert to Opp) */}
         <div className="px-6 py-3 bg-indigo-50/80 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-2">
@@ -470,6 +497,8 @@ export const LeadDrawer: React.FC<LeadDrawerProps> = ({
 
           {activeTab === 'history' && (
             <div className="space-y-3">
+              <h4 className="font-bold text-slate-800 text-sm">Customer History</h4>
+              <CustomerHistoryPeek companyName={lead.companyName} />
               <h4 className="font-bold text-slate-800 text-sm">Immutable Assignment & Routing Logs</h4>
               {relevantAssignments.length === 0 ? (
                 <p className="text-slate-400 italic">No historical reassignments logged for this record.</p>
