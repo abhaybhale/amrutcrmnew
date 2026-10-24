@@ -52,6 +52,15 @@ The applications cannot share data by changing a connection string. Firestore do
 | `fieldAttributes` | `custom_fields` plus new metadata where needed | Map field definitions, options, validation and module visibility. |
 | `webForms` | new `web_forms` tables | Preserve form definitions and add a secure public submission endpoint with spam controls. |
 | `auditLogs` | `audit_log` | Preserve original timestamp, actor, entity and old/new values; make migrated entries immutable. |
+| `namedAccounts` | `accounts` plus named-account metadata | Match to the canonical account, retain primary/secondary ownership and source-import information. |
+| `datasets` / `datasetRecords` | `growth_import_batches` / `growth_database_records` | Preserve import source, tags, validation status and conversion lineage. |
+| `marketingProjects` | `campaigns` or `communication_campaigns` | Map project type, dates, ownership and linked datasets after campaign-type review. |
+| `notifications` | `notifications` | Retain valid-user notifications; archive historical notifications whose user no longer exists. |
+| `ownershipConflicts` | new ownership-conflict history table | Preserve review decisions; never overwrite current owners automatically. |
+| `userActivity` | login/action reporting table | Preserve user action, date and entity context for daily/weekly reporting. |
+| `authProfiles` | identity mapping table | Use to connect Firebase UIDs to CRM users and new Supabase identities. |
+| `attachments` | object storage plus attachment metadata | Copy binaries separately and retain entity links and checksums. |
+| `priorityLevels` / `discountApprovalRequests` / `deletedRoleIds` | configuration and approval tables | Preserve configuration and historical approval state with explicit relational mappings. |
 
 ## Required schema additions
 
